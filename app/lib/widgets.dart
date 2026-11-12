@@ -1,7 +1,6 @@
-import 'package:finding_the_lost/models.dart';
-import 'package:finding_the_lost/widgets.dart';
-import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/material.dart';
 
+import 'models.dart';
 
 const kFoundColor = Color(0xFF2E7D5B);
 const kLostColor = Color(0xFFD9822B);

@@ -1,7 +1,6 @@
-import 'package:test/test.dart';
-
-import '../lib/models.dart';
-import '../lib/widgets.dart';
+import 'package:finding_the_lost/models.dart';
+import 'package:finding_the_lost/widgets.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('distance labels', () {
