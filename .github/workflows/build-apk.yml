@@ -1,0 +1,104 @@
+# Builds the Android APK on GitHub's servers, so no Android Studio or
+# Android SDK is needed on your computer.
+#
+# Runs on every push that changes the app, or by hand from the Actions tab
+# (where you can also bake in your server address).
+#
+# Where to get the APK afterwards:
+#   - Releases (right side of the repo page): open it on your phone and
+#     tap the .apk to install.
+#   - Actions -> the run -> "Artifacts" at the bottom (downloads as a zip).
+
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - ".github/workflows/build-apk.yml"
+  workflow_dispatch:
+    inputs:
+      api_base:
+        description: "Server address baked into the app, e.g. http://192.168.1.20:8000 (can also be changed on the app's login screen)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write # needed to publish the APK as a release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      # The repo holds only the app code and AndroidManifest.xml; this adds the
+      # standard Android project files around it without overwriting anything.
+      - name: Generate Android project files
+        run: flutter create --platforms=android --org com.findingthelost --project-name finding_the_lost .
+
+      - name: Get packages
+        run: flutter pub get
+
+      # Problems are listed in the run's summary page so they are easy to
+      # screenshot. This step never fails the build; the APK build below does
+      # if the code doesn't compile.
+      - name: Check code (flutter analyze)
+        continue-on-error: true
+        run: |
+          set +e
+          flutter analyze --no-fatal-infos --no-fatal-warnings > analyze.txt 2>&1
+          status=$?
+          {
+            echo "## flutter analyze"
+            echo '```'
+            cat analyze.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat analyze.txt
+          exit $status
+
+      - name: Build APK
+        run: |
+          if [ -n "${{ github.event.inputs.api_base }}" ]; then
+            flutter build apk --release --dart-define=API_BASE=${{ github.event.inputs.api_base }}
+          else
+            flutter build apk --release
+          fi
+          cp build/app/outputs/flutter-apk/app-release.apk "finding-the-lost-${{ github.run_number }}.apk"
+
+      - name: Upload APK (Actions artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: finding-the-lost-apk
+          path: app/finding-the-lost-${{ github.run_number }}.apk
+
+      - name: Publish APK (GitHub release)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-build-${{ github.run_number }}
+          name: "App build #${{ github.run_number }}"
+          prerelease: true
+          body: |
+            Android test build of Finding the Lost from commit ${{ github.sha }}.
+            Open this page on your phone and tap the .apk to install
+            (allow "Install unknown apps" for your browser when asked).
+          files: app/finding-the-lost-${{ github.run_number }}.apk

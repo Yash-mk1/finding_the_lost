@@ -1,0 +1,26 @@
+name: finding_the_lost
+description: "Finding the Lost - a community lost-and-found app."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.2
+  provider: ^6.1.2
+  shared_preferences: ^2.3.2
+  image_picker: ^1.1.2
+  geolocator: ^14.0.0
+  flutter_map: ^8.1.0
+  latlong2: ^0.9.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
