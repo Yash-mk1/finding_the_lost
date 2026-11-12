@@ -87,7 +87,7 @@ class _MapScreenState extends State<MapScreen> {
 
   Future<void> _centreOnMe({bool initial = false}) async {
     try {
-      final position = await LocationService.current();
+      final position = initial ? await LocationService.quick() : await LocationService.current();
       _me = LatLng(position.latitude, position.longitude);
       if (mounted) setState(() {});
       if (_mapReady) {

@@ -14,7 +14,9 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ["id", "username", "email", "display_name", "date_joined"]
-        read_only_fields = ["id", "username", "date_joined"]
+        # Email is read-only: it is a login name, so letting someone change it
+        # to another person's address would break that person's login.
+        read_only_fields = ["id", "username", "email", "date_joined"]
 
 
 class RegisterSerializer(serializers.Serializer):
@@ -50,6 +52,9 @@ class RegisterSerializer(serializers.Serializer):
 
 
 class RegisterView(APIView):
+    # No token check here: an old or deleted token saved on the phone must
+    # never stop someone from signing up or logging in again.
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
     throttle_scope = "auth"
 
@@ -64,12 +69,14 @@ class RegisterView(APIView):
 class LoginView(APIView):
     """Log in with username or email + password; returns an API token."""
 
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
     throttle_scope = "auth"
 
     def post(self, request):
-        identifier = (request.data.get("username") or "").strip()
-        password = request.data.get("password") or ""
+        data = request.data if hasattr(request.data, "get") else {}
+        identifier = str(data.get("username") or "").strip()
+        password = str(data.get("password") or "")
         match = User.objects.filter(Q(username__iexact=identifier) | Q(email__iexact=identifier)).first()
         user = authenticate(request, username=match.username, password=password) if match else None
         if user is None:

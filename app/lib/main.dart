@@ -5,9 +5,21 @@ import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
 import 'session.dart';
 
+final _navigatorKey = GlobalKey<NavigatorState>();
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  final session = Session()..init();
+  final session = Session();
+  // When someone is signed out (by choice, or because the server rejected
+  // their token), close any open post or form so the login screen shows.
+  var wasSignedIn = false;
+  session.addListener(() {
+    if (wasSignedIn && !session.signedIn) {
+      _navigatorKey.currentState?.popUntil((route) => route.isFirst);
+    }
+    wasSignedIn = session.signedIn;
+  });
+  session.init();
   runApp(ChangeNotifierProvider.value(value: session, child: const FindingTheLostApp()));
 }
 
@@ -19,6 +31,7 @@ class FindingTheLostApp extends StatelessWidget {
     final scheme = ColorScheme.fromSeed(seedColor: const Color(0xFF2E7D5B));
     return MaterialApp(
       title: 'Finding the Lost',
+      navigatorKey: _navigatorKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: scheme,

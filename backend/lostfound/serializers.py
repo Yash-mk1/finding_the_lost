@@ -3,6 +3,7 @@ import math
 
 from django.conf import settings
 from django.contrib.gis.geos import Point
+from django.utils import timezone
 from rest_framework import serializers
 
 from .models import Category, Claim, Comment, Handover, Post, PostImage, Report
@@ -64,11 +65,23 @@ class PostListSerializer(serializers.ModelSerializer):
 
     # --- location: exact only for people allowed to see it -----------------
     def _exact_allowed(self, post):
-        cache = self.context.setdefault("_exact_cache", {})
-        if post.pk not in cache:
-            request = self.context.get("request")
-            cache[post.pk] = post.can_see_exact_location(getattr(request, "user", None))
-        return cache[post.pk]
+        if not post.is_approximate:
+            return True
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is None or not user.is_authenticated:
+            return False
+        if user.pk == post.author_id:
+            return True
+        # One query per response (not one per post) for "which kept items has
+        # the finder approved me for".
+        approved = self.context.get("_approved_post_ids")
+        if approved is None:
+            approved = set(
+                Claim.objects.filter(claimant=user, status=Claim.Status.APPROVED).values_list("post_id", flat=True)
+            )
+            self.context["_approved_post_ids"] = approved
+        return post.pk in approved
 
     def _shown_point(self, post):
         return post.location if self._exact_allowed(post) else post.public_location
@@ -155,7 +168,8 @@ class PostCreateSerializer(serializers.ModelSerializer):
         child=serializers.ImageField(), required=False, write_only=True, allow_empty=True
     )
     # JSON string: one list of {x, y, w, h} fractions per image, in upload order.
-    blur_regions = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    blur_regions = serializers.CharField(required=False, allow_blank=True, write_only=True, max_length=20000)
+    accuracy_m = serializers.FloatField(required=False, allow_null=True, min_value=0, max_value=100000)
 
     class Meta:
         model = Post
@@ -174,7 +188,13 @@ class PostCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Must be a JSON list.")
         if not isinstance(data, list) or not all(isinstance(item, list) for item in data):
             raise serializers.ValidationError("Must be a list with one list of regions per photo.")
+        if any(len(item) > 30 for item in data):
+            raise serializers.ValidationError("Too many blurred areas on one photo.")
         return data
+
+    def validate_occurred_at(self, value):
+        # A phone clock that runs fast must not put a post in the future.
+        return min(value, timezone.now())
 
     def validate(self, attrs):
         errors = {}

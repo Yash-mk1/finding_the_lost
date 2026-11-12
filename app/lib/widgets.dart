@@ -115,7 +115,18 @@ class NetImage extends StatelessWidget {
   final String? url;
   final BoxFit fit;
   final IconData placeholderIcon;
-  const NetImage(this.url, {super.key, this.fit = BoxFit.cover, this.placeholderIcon = Icons.image_outlined});
+
+  /// Decode the photo no wider than this many pixels. Small tiles in a long
+  /// feed would otherwise each hold a full-size photo in memory.
+  final int? cacheWidth;
+
+  const NetImage(
+    this.url, {
+    super.key,
+    this.fit = BoxFit.cover,
+    this.placeholderIcon = Icons.image_outlined,
+    this.cacheWidth,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -128,6 +139,7 @@ class NetImage extends StatelessWidget {
     return Image.network(
       url!,
       fit: fit,
+      cacheWidth: cacheWidth,
       errorBuilder: (_, __, ___) => placeholder,
       loadingBuilder: (context, child, progress) => progress == null ? child : placeholder,
     );
@@ -163,7 +175,7 @@ class PostCard extends StatelessWidget {
                 child: SizedBox(
                   width: 92,
                   height: 92,
-                  child: NetImage(post.thumbnail, placeholderIcon: categoryIcon(post.category)),
+                  child: NetImage(post.thumbnail, cacheWidth: 300, placeholderIcon: categoryIcon(post.category)),
                 ),
               ),
               const SizedBox(width: 12),

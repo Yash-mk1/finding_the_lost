@@ -123,10 +123,13 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
         ],
       ),
     );
-    if (send == true && answer.text.trim().isNotEmpty) {
-      await _run(() => _api.sendClaim(post.id, answer.text.trim(), message.text.trim()).then((_) {}),
-          done: 'Claim sent. You\'ll see the finder\'s reply here and in My activity.');
+    if (send != true || !mounted) return;
+    if (answer.text.trim().isEmpty) {
+      showSnack(context, "Answer the finder's question to send a claim.", error: true);
+      return;
     }
+    await _run(() => _api.sendClaim(post.id, answer.text.trim(), message.text.trim()).then((_) {}),
+        done: 'Claim sent. You\'ll see the finder\'s reply here and in My activity.');
   }
 
   Future<void> _report() async {

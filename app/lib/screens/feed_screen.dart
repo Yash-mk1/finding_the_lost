@@ -26,6 +26,8 @@ class FeedScreenState extends State<FeedScreen> {
   int _page = 1;
   bool _hasMore = true;
   bool _loading = false;
+  bool _locating = true; // first location lookup still running
+  int _generation = 0; // bumped on every refresh so stale replies are ignored
   String? _error;
 
   double? _lat, _lng;
@@ -42,7 +44,11 @@ class FeedScreenState extends State<FeedScreen> {
     _scroll.addListener(() {
       if (_scroll.position.pixels > _scroll.position.maxScrollExtent - 400) _loadMore();
     });
-    _locate().then((_) => refresh());
+    _locate().then((_) {
+      if (!mounted) return;
+      _locating = false;
+      refresh();
+    });
   }
 
   @override
@@ -55,7 +61,7 @@ class FeedScreenState extends State<FeedScreen> {
 
   Future<void> _locate() async {
     try {
-      final position = await LocationService.current();
+      final position = await LocationService.quick();
       _lat = position.latitude;
       _lng = position.longitude;
       _locationNote = null;
@@ -70,17 +76,21 @@ class FeedScreenState extends State<FeedScreen> {
   }
 
   Future<void> refresh() async {
+    if (!mounted) return;
+    _generation++;
     setState(() {
       _posts.clear();
       _page = 1;
       _hasMore = true;
       _error = null;
+      _loading = false;
     });
     await _loadMore();
   }
 
   Future<void> _loadMore() async {
     if (_loading || !_hasMore) return;
+    final generation = _generation;
     setState(() => _loading = true);
     final api = context.read<Session>().api;
     try {
@@ -94,16 +104,23 @@ class FeedScreenState extends State<FeedScreen> {
         sort: _lat == null && _sort == 'near' ? 'new' : _sort,
         page: _page,
       );
-      if (!mounted) return;
+      // A newer refresh (new filter or search) started meanwhile: drop this reply.
+      if (!mounted || generation != _generation) return;
       setState(() {
         _posts.addAll(page.results);
         _hasMore = page.hasMore;
         _page += 1;
       });
     } on ApiException catch (e) {
-      if (mounted) setState(() => _error = e.message);
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _error = e.message;
+        // Stop auto-loading on scroll after a failure; pull down to retry.
+        _hasMore = false;
+      });
+      if (_posts.isNotEmpty) showSnack(context, e.message, error: true);
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && generation == _generation) setState(() => _loading = false);
     }
   }
 
@@ -180,7 +197,25 @@ class FeedScreenState extends State<FeedScreen> {
 
   Future<void> _open(Post post) async {
     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => PostDetailScreen(postId: post.id)));
-    refresh();
+    if (!mounted) return;
+    // Update just this card (votes, comments, status) and keep the scroll position.
+    try {
+      final fresh = await context.read<Session>().api.post(post.id, lat: _lat, lng: _lng);
+      if (!mounted) return;
+      final index = _posts.indexWhere((p) => p.id == post.id);
+      if (index < 0) return;
+      setState(() {
+        if (fresh.status == 'returned' || fresh.status == 'hidden') {
+          _posts.removeAt(index);
+        } else {
+          _posts[index] = fresh;
+        }
+      });
+    } on ApiException catch (e) {
+      if (mounted && e.statusCode == 404) {
+        setState(() => _posts.removeWhere((p) => p.id == post.id)); // deleted
+      }
+    }
   }
 
   @override
@@ -260,7 +295,7 @@ class FeedScreenState extends State<FeedScreen> {
         ),
       ]);
     }
-    if (!_loading && _posts.isEmpty) {
+    if (!_loading && !_locating && _posts.isEmpty) {
       return ListView(children: [
         const SizedBox(height: 80),
         MessageView(
@@ -304,7 +339,7 @@ class FeedScreenState extends State<FeedScreen> {
           return Padding(
             padding: const EdgeInsets.all(24),
             child: Center(
-              child: _loading
+              child: _loading || _locating
                   ? const CircularProgressIndicator()
                   : _hasMore
                       ? const SizedBox.shrink()

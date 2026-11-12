@@ -1,14 +1,17 @@
+import math
+
 from django.conf import settings
+from django.contrib.gis.db.models import PointField
 from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.geos import Point, Polygon
 from django.contrib.gis.measure import D
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Exists, IntegerField, OuterRef, Q, Subquery, Value
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Cast, Coalesce
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, permissions, status, viewsets
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import action, api_view, authentication_classes, permission_classes
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
@@ -44,6 +47,7 @@ def parse_point(params):
         lat, lng = float(lat), float(lng)
     except ValueError:
         raise ValidationError({"lat": "lat and lng must be numbers."})
+    # NaN fails every comparison, so this also rejects "nan" and "inf".
     if not (-90 <= lat <= 90 and -180 <= lng <= 180):
         raise ValidationError({"lat": "lat/lng out of range."})
     return Point(lng, lat, srid=4326)
@@ -83,6 +87,8 @@ class PostViewSet(viewsets.ModelViewSet):
             self.throttle_scope = "post_create"
         elif self.action == "claims" and self.request.method == "POST":
             self.throttle_scope = "claim"
+        elif self.action in ("comments", "report") and self.request.method == "POST":
+            self.throttle_scope = "comment"
         return super().get_throttles()
 
     def get_serializer_class(self):
@@ -96,7 +102,10 @@ class PostViewSet(viewsets.ModelViewSet):
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
-        context["origin"] = getattr(self, "_origin", None)
+        origin = getattr(self, "_origin", None)
+        if origin is None and self.action == "retrieve":
+            origin = parse_point(self.request.query_params)  # optional ?lat=&lng= for "x m away"
+        context["origin"] = origin
         return context
 
     def base_queryset(self):
@@ -142,9 +151,12 @@ class PostViewSet(viewsets.ModelViewSet):
         self._origin = origin
         if origin is not None:
             try:
-                radius_km = min(max(float(params.get("radius_km", 5)), 0.1), 100)
+                radius_km = float(params.get("radius_km") or 5)
             except ValueError:
                 raise ValidationError({"radius_km": "Must be a number."})
+            if not math.isfinite(radius_km):
+                raise ValidationError({"radius_km": "Must be a number."})
+            radius_km = min(max(radius_km, 0.1), 100)
             queryset = queryset.filter(public_location__dwithin=(origin, D(km=radius_km)))
             queryset = queryset.annotate(distance=Distance("public_location", origin))
 
@@ -196,9 +208,21 @@ class PostViewSet(viewsets.ModelViewSet):
                 min_lng, min_lat, max_lng, max_lat = (float(v) for v in bbox.split(","))
             except ValueError:
                 raise ValidationError({"bbox": "Use bbox=minLng,minLat,maxLng,maxLat."})
-            area = Polygon.from_bbox((min_lng, min_lat, max_lng, max_lat))
-            area.srid = 4326
-            queryset = queryset.filter(public_location__intersects=area)
+            if not all(math.isfinite(v) for v in (min_lng, min_lat, max_lng, max_lat)):
+                raise ValidationError({"bbox": "Use bbox=minLng,minLat,maxLng,maxLat."})
+            min_lat, max_lat = max(min_lat, -90.0), min(max_lat, 90.0)
+            if min_lng < -180 or max_lng > 180 or min_lng >= max_lng:
+                # Zoomed out past the edge of the world map: search every longitude.
+                min_lng, max_lng = -180.0, 180.0
+            if min_lat < max_lat:
+                area = Polygon.from_bbox((min_lng, min_lat, max_lng, max_lat))
+                area.srid = 4326
+                # Compare as flat geometry. On the geography type a big box is
+                # read as a shape on the globe, which errors or matches nothing
+                # once the map is zoomed out.
+                queryset = queryset.annotate(
+                    public_geom=Cast("public_location", PointField(srid=4326))
+                ).filter(public_geom__intersects=area)
         serializer = PostListSerializer(queryset[:300], many=True, context=self.get_serializer_context())
         return Response(serializer.data)
 
@@ -206,14 +230,14 @@ class PostViewSet(viewsets.ModelViewSet):
     def vote(self, request, pk=None):
         """Toggle an upvote. Upvotes push a post up the feed so more people see it."""
         post = self._post(pk)
-        vote = Vote.objects.filter(post=post, user=request.user).first()
         with transaction.atomic():
-            if vote:
+            # get_or_create so a double tap can't raise a duplicate-vote error.
+            vote, created = Vote.objects.get_or_create(post=post, user=request.user)
+            if created:
+                voted = True
+            else:
                 vote.delete()
                 voted = False
-            else:
-                Vote.objects.create(post=post, user=request.user)
-                voted = True
             post.score = post.votes.count()
             post.save(update_fields=["score", "updated_at"])
         return Response({"has_voted": voted, "score": post.score})
@@ -334,8 +358,10 @@ class ClaimViewSet(mixins.RetrieveModelMixin, viewsets.GenericViewSet):
         claim = self.get_object()
         if claim.claimant_id != request.user.pk:
             raise PermissionDenied("Only the person who sent the claim can withdraw it.")
-        if claim.status == Claim.Status.APPROVED:
-            raise ValidationError({"detail": "Ask the finder to cancel an approved claim."})
+        # Only waiting claims can be withdrawn. Otherwise a rejected claimant
+        # could withdraw and claim again as often as they like.
+        if claim.status != Claim.Status.PENDING:
+            raise ValidationError({"detail": "This claim has already been decided."})
         claim.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -361,6 +387,7 @@ class MyClaimsViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 @api_view(["GET"])
+@authentication_classes([])  # public; a stale saved token must not break it
 @permission_classes([permissions.AllowAny])
 def meta(request):
     """Choices and guidance the app shows in its forms, kept in one place."""

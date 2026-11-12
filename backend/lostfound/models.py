@@ -5,6 +5,8 @@ from datetime import timedelta
 from django.conf import settings
 from django.contrib.gis.db import models
 from django.contrib.gis.geos import Point
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
 from django.utils import timezone
 
 
@@ -175,6 +177,13 @@ class PostImage(models.Model):
 
     class Meta:
         ordering = ["position", "id"]
+
+
+@receiver(post_delete, sender=PostImage)
+def delete_photo_file(sender, instance, **kwargs):
+    """Remove the photo from disk when its post (or the photo row) is deleted."""
+    if instance.image:
+        instance.image.delete(save=False)
 
 
 class Comment(models.Model):

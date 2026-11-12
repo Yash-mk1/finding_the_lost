@@ -7,6 +7,8 @@ same file works on a laptop, in Docker and on a server. See .env.example.
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -21,8 +23,14 @@ def env_bool(name, default=False):
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+_DEV_SECRET_KEYS = {"dev-only-insecure-key-change-me", "change-me-to-a-long-random-string"}
 SECRET_KEY = env("DJANGO_SECRET_KEY", "dev-only-insecure-key-change-me")
 DEBUG = env_bool("DJANGO_DEBUG", True)
+if not DEBUG and SECRET_KEY in _DEV_SECRET_KEYS:
+    raise ImproperlyConfigured(
+        "Set DJANGO_SECRET_KEY to a long random value before running with DJANGO_DEBUG=false. "
+        'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(50))"'
+    )
 ALLOWED_HOSTS = [h.strip() for h in env("DJANGO_ALLOWED_HOSTS", "*").split(",") if h.strip()]
 
 # GeoDjango needs the GDAL and GEOS C libraries. On Linux/macOS they are found
@@ -102,8 +110,8 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = Path(env("MEDIA_ROOT", str(BASE_DIR / "media")))
-# Let Django serve uploaded photos itself (fine for a class demo; use a CDN or
-# Nginx in real production).
+# Let Django serve uploaded photos and the admin's CSS itself (fine for a class
+# demo; use a CDN or Nginx in real production).
 SERVE_MEDIA = env_bool("SERVE_MEDIA", True)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -130,7 +138,10 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "anon": env("THROTTLE_ANON", "120/min"),
         "user": env("THROTTLE_USER", "600/min"),
-        "auth": env("THROTTLE_AUTH", "10/min"),
+        # Per network address. A whole class on one Wi-Fi shares an address, so
+        # this is roomy enough for everyone to sign up during a demo.
+        "auth": env("THROTTLE_AUTH", "30/min"),
+        "comment": env("THROTTLE_COMMENT", "30/min"),
         "post_create": env("THROTTLE_POST_CREATE", "20/hour"),
         "claim": env("THROTTLE_CLAIM", "10/hour"),
     },

@@ -1,11 +1,13 @@
 import io
 import json
 import math
+import os
 
 from django.contrib.auth import get_user_model
 from django.contrib.gis.geos import Point
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.cache import cache
+from django.utils import timezone
 from PIL import Image
 from rest_framework.test import APITestCase
 
@@ -324,3 +326,99 @@ class CommunityTests(ApiTestCase):
         data = self.client.get("/api/meta/").data
         self.assertEqual(len(data["handover_options"]), 4)
         self.assertTrue(all(option["guidance"] for option in data["handover_options"]))
+
+
+class HardeningTests(ApiTestCase):
+    """Regression tests for problems found in the pre-release audit."""
+
+    def test_map_works_when_zoomed_out(self):
+        post = self.create_found(handover=Handover.LEFT_THERE)
+        self.anonymous()
+        for bbox in ("-100,-60,100,60", "-180,-90,180,90", "-400,-120,500,120", "60,0,100,40"):
+            response = self.client.get("/api/posts/map/", {"bbox": bbox})
+            self.assertEqual(response.status_code, 200, bbox)
+            self.assertEqual([p["id"] for p in response.data], [post["id"]], bbox)
+
+    def test_bad_numbers_are_rejected_not_crashes(self):
+        self.anonymous()
+        self.assertEqual(self.client.get("/api/posts/map/", {"bbox": "nan,nan,nan,nan"}).status_code, 400)
+        self.assertEqual(self.client.get("/api/posts/map/", {"bbox": "1,2,3"}).status_code, 400)
+        self.assertEqual(self.client.get("/api/posts/", {"lat": "nan", "lng": "77"}).status_code, 400)
+        self.assertEqual(
+            self.client.get("/api/posts/", {"lat": 12.9, "lng": 77.5, "radius_km": "nan"}).status_code, 400
+        )
+        self.assertEqual(
+            self.client.get("/api/posts/", {"lat": 12.9, "lng": 77.5, "radius_km": "inf"}).status_code, 400
+        )
+        self.as_user(self.finder)
+        response = self.client.post("/api/posts/", {
+            "post_type": "lost", "title": "x item", "category": "other", "latitude": "nan", "longitude": "inf",
+        }, format="multipart")
+        self.assertEqual(response.status_code, 400)
+
+    def test_stale_token_does_not_block_login_or_public_pages(self):
+        self.client.credentials(HTTP_AUTHORIZATION="Token this-token-was-deleted")
+        response = self.client.post("/api/auth/login/", {"username": "finder", "password": "a-strong-pass-42"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.client.get("/api/meta/").status_code, 200)
+        response = self.client.post("/api/auth/register/", {
+            "username": "newperson", "email": "new@example.com", "password": "a-strong-pass-42",
+        })
+        self.assertEqual(response.status_code, 201)
+        # Private pages still say "log in again", which the app handles.
+        self.assertEqual(self.client.get("/api/me/posts/").status_code, 401)
+
+    def test_malformed_login_body(self):
+        self.anonymous()
+        self.assertEqual(self.client.post("/api/auth/login/", [1, 2], format="json").status_code, 400)
+        self.assertEqual(self.client.post("/api/auth/login/", {"username": 5}, format="json").status_code, 400)
+
+    def test_email_cannot_be_changed_to_hijack_a_login(self):
+        self.as_user(self.stranger)
+        self.client.patch("/api/auth/me/", {"email": "finder@example.com", "display_name": "S"})
+        self.assertEqual(User.objects.get(username="stranger").email, "stranger@example.com")
+        self.assertEqual(User.objects.get(username="stranger").first_name, "S")
+
+    def test_rejected_claim_cannot_be_withdrawn_and_resent(self):
+        post = self.create_found(handover=Handover.KEPT)
+        self.as_user(self.stranger)
+        claim = self.client.post(f"/api/posts/{post['id']}/claims/", {"answer": "A dog"}).data
+        self.as_user(self.finder)
+        self.client.post(f"/api/claims/{claim['id']}/decide/", {"decision": "reject"})
+        self.as_user(self.stranger)
+        self.assertEqual(self.client.post(f"/api/claims/{claim['id']}/withdraw/").status_code, 400)
+        self.assertEqual(self.client.post(f"/api/posts/{post['id']}/claims/", {"answer": "A cat"}).status_code, 400)
+
+    def test_future_time_is_clamped(self):
+        self.as_user(self.owner)
+        response = self.client.post("/api/posts/", {
+            "post_type": "lost", "title": "Lost cap", "category": "clothing", "latitude": 12.9,
+            "longitude": 77.5, "occurred_at": "2099-01-01T00:00:00Z",
+        }, format="multipart")
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertLessEqual(Post.objects.get(pk=response.data["id"]).occurred_at, timezone.now())
+
+    def test_photo_file_is_deleted_with_the_post(self):
+        post = self.create_found(handover=Handover.LEFT_THERE)
+        path = Post.objects.get(pk=post["id"]).images.first().image.path
+        self.assertTrue(os.path.exists(path))
+        self.as_user(self.finder)
+        self.assertEqual(self.client.delete(f"/api/posts/{post['id']}/").status_code, 204)
+        self.assertFalse(os.path.exists(path))
+
+    def test_kept_item_exact_point_never_in_lists_or_map(self):
+        post = self.create_found(handover=Handover.KEPT)
+        self.as_user(self.stranger)
+        feed = self.client.get("/api/posts/", {"lat": BANGALORE[0], "lng": BANGALORE[1]}).data["results"]
+        on_map = self.client.get("/api/posts/map/", {"bbox": "77,12,78,14"}).data
+        for item in (feed[0], on_map[0]):
+            self.assertEqual(item["id"], post["id"])
+            self.assertTrue(item["location_is_approximate"])
+            self.assertGreater(metres_between(BANGALORE, (item["latitude"], item["longitude"])), 50)
+            self.assertGreaterEqual(item["distance_m"] if item["distance_m"] is not None else 50, 50)
+
+    def test_double_vote_is_safe(self):
+        post = self.create_found(handover=Handover.LEFT_THERE)
+        self.as_user(self.owner)
+        for expected in (1, 0, 1):
+            self.assertEqual(self.client.post(f"/api/posts/{post['id']}/vote/").data["score"], expected)

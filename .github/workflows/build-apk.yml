@@ -27,9 +27,15 @@ on:
 permissions:
   contents: write # needed to publish the APK as a release
 
+# If you push again while a build is running, the older build is cancelled.
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     defaults:
       run:
         working-directory: app
@@ -40,11 +46,15 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "21" # newer Android build tools need Java 21
 
+      # Pinned on purpose. An unpinned "latest stable" changes under you and
+      # can break a build that worked yesterday. To upgrade, change this number
+      # (and check the Java version above still matches what Flutter needs).
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: "3.50.0"
           cache: true
 
       - name: Flutter version
@@ -76,14 +86,32 @@ jobs:
           cat analyze.txt
           exit $status
 
-      - name: Build APK
+      - name: Run unit tests
+        continue-on-error: true
+        run: flutter test
+
+      # Sign every build with the same test key (app/ci/debug.keystore), so a
+      # new APK installs over the old one. Without this, each build gets a
+      # random key and Android refuses the update with "App not installed".
+      - name: Use the project's test signing key
         run: |
-          if [ -n "${{ github.event.inputs.api_base }}" ]; then
-            flutter build apk --release --dart-define=API_BASE=${{ github.event.inputs.api_base }}
-          else
-            flutter build apk --release
+          for dir in "$HOME/.android" "${ANDROID_USER_HOME:-}" "${ANDROID_SDK_HOME:+$ANDROID_SDK_HOME/.android}"; do
+            if [ -n "$dir" ]; then
+              mkdir -p "$dir"
+              cp ci/debug.keystore "$dir/debug.keystore"
+            fi
+          done
+
+      - name: Build APK
+        env:
+          API_BASE: ${{ github.event.inputs.api_base }}
+        run: |
+          args=(--release --build-number="$GITHUB_RUN_NUMBER")
+          if [ -n "$API_BASE" ]; then
+            args+=("--dart-define=API_BASE=$API_BASE")
           fi
-          cp build/app/outputs/flutter-apk/app-release.apk "finding-the-lost-${{ github.run_number }}.apk"
+          flutter build apk "${args[@]}"
+          cp build/app/outputs/flutter-apk/app-release.apk "finding-the-lost-$GITHUB_RUN_NUMBER.apk"
 
       - name: Upload APK (Actions artifact)
         uses: actions/upload-artifact@v4

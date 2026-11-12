@@ -21,20 +21,32 @@ class Session extends ChangeNotifier {
   bool get signedIn => user != null;
 
   Future<void> init() async {
-    final prefs = await SharedPreferences.getInstance();
-    api = ApiClient(prefs.getString('api_base') ?? kDefaultApiBase, token: prefs.getString('token'));
-    api.onUnauthorized = _expire;
-    if (api.token != null) {
-      try {
-        user = await api.me();
-      } catch (_) {
-        // Offline or token expired: show the login screen.
-        user = null;
-      }
+    String? savedBase;
+    String? savedToken;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      savedBase = prefs.getString('api_base');
+      savedToken = prefs.getString('token');
+    } catch (_) {
+      // Storage unavailable: start signed out rather than hang on the splash.
     }
-    await loadMeta();
-    ready = true;
-    notifyListeners();
+    api = ApiClient(savedBase ?? kDefaultApiBase, token: savedToken);
+    api.onUnauthorized = _expire;
+    try {
+      if (api.token != null) {
+        try {
+          user = await api.me();
+        } catch (_) {
+          // Offline, or the token is no longer valid (in which case _expire
+          // has already removed it): show the login screen.
+          user = null;
+        }
+      }
+      await loadMeta();
+    } finally {
+      ready = true;
+      notifyListeners();
+    }
   }
 
   Future<void> loadMeta() async {
@@ -46,7 +58,7 @@ class Session extends ChangeNotifier {
   }
 
   Future<void> setServer(String baseUrl) async {
-    api.baseUrl = baseUrl.trim();
+    api.baseUrl = ApiClient.normalizeBase(baseUrl);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('api_base', api.baseUrl);
     await loadMeta();
@@ -78,16 +90,22 @@ class Session extends ChangeNotifier {
     await _clear();
   }
 
+  /// The server rejected our saved token (logged out elsewhere, or the
+  /// server's data was reset). Forget it so the next log in starts clean.
   void _expire() {
-    if (user != null) _clear();
+    if (api.token != null || user != null) _clear();
   }
 
   Future<void> _clear() async {
     api.token = null;
     user = null;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('token');
-    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('token');
+    } catch (_) {
+      // Nothing more we can do; the in-memory session is already cleared.
+    }
+    if (ready) notifyListeners();
   }
 }
 
@@ -102,7 +120,19 @@ class LocationException implements Exception {
 /// Reads the phone's position only when asked (taking a photo, opening the
 /// feed). The app never tracks location in the background.
 class LocationService {
-  static Future<Position> current() async {
+  static Future<void>? _permissionCheck;
+  static Future<Position>? _fix;
+
+  /// Checks GPS is on and asks for permission if needed. Screens that open
+  /// together (feed and map) share one check, because Android refuses a
+  /// second permission request while the first dialog is still showing.
+  static Future<void> _ensureAllowed() {
+    return _permissionCheck ??= _checkAllowed().whenComplete(() {
+      _permissionCheck = null;
+    });
+  }
+
+  static Future<void> _checkAllowed() async {
     if (!await Geolocator.isLocationServiceEnabled()) {
       throw LocationException('Turn on location (GPS) so we can tag where the item is.', openSettings: true);
     }
@@ -116,9 +146,30 @@ class LocationService {
     if (permission == LocationPermission.deniedForever) {
       throw LocationException('Location is blocked for this app. Allow it in Settings.', openSettings: true);
     }
+  }
+
+  /// A fresh, precise position. Used when tagging a found item.
+  static Future<Position> current() {
+    return _fix ??= _fresh().whenComplete(() {
+      _fix = null;
+    });
+  }
+
+  static Future<Position> _fresh() async {
+    await _ensureAllowed();
     return Geolocator.getCurrentPosition(
       locationSettings: LocationSettings(accuracy: LocationAccuracy.high, timeLimit: const Duration(seconds: 20)),
     );
+  }
+
+  /// A position quickly: the phone's recent one if it has it, otherwise a
+  /// fresh fix. Good enough for "posts near me", and doesn't keep the feed
+  /// waiting for GPS indoors.
+  static Future<Position> quick() async {
+    await _ensureAllowed();
+    final last = await lastKnown();
+    if (last != null && DateTime.now().difference(last.timestamp).inMinutes.abs() < 10) return last;
+    return current();
   }
 
   static Future<Position?> lastKnown() async {

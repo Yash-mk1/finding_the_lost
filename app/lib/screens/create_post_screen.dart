@@ -434,7 +434,10 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
     } else if (_pinMoved) {
       status = 'Pin placed by you.';
     } else {
-      status = 'Tagged from GPS (about ${_draft.accuracyM?.round() ?? '?'} m accuracy).';
+      final accuracy = _draft.accuracyM;
+      status = accuracy != null && accuracy > 100
+          ? 'GPS is rough here (about ${accuracy.round()} m off). Tap the map to put the pin on the exact spot.'
+          : 'Tagged from GPS (about ${accuracy?.round() ?? '?'} m accuracy).';
     }
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -447,7 +450,12 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
             options: MapOptions(
               initialCenter: point,
               initialZoom: hasPoint ? 17 : 13,
-              onMapReady: () => _mapReady = true,
+              onMapReady: () {
+                _mapReady = true;
+                // The position may have arrived before the map finished loading.
+                final lat = _draft.latitude, lng = _draft.longitude;
+                if (lat != null && lng != null) _map.move(LatLng(lat, lng), 17);
+              },
               onTap: (_, latLng) => _movePin(latLng),
             ),
             children: [

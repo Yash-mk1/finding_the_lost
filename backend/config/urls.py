@@ -25,9 +25,11 @@ urlpatterns = [
     path("api/", include(router.urls)),
 ]
 
-# Uploaded photos. django.conf.urls.static.static() only works with DEBUG on,
-# so serve them explicitly; put Nginx or a CDN in front for real traffic.
+# Uploaded photos, and the admin's CSS/JS (collected by `collectstatic`).
+# Django only serves these by itself under `runserver`, so under gunicorn they
+# are served explicitly; put Nginx or a CDN in front for real traffic.
 if settings.DEBUG or settings.SERVE_MEDIA:
     urlpatterns += [
         re_path(r"^media/(?P<path>.*)$", serve, {"document_root": settings.MEDIA_ROOT}),
+        re_path(r"^static/(?P<path>.*)$", serve, {"document_root": settings.STATIC_ROOT}),
     ]

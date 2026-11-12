@@ -53,12 +53,28 @@ class ApiClient {
   /// Called when the server says the saved token is no longer valid.
   void Function()? onUnauthorized;
 
-  ApiClient(this.baseUrl, {this.token});
+  ApiClient(String baseUrl, {this.token}) : baseUrl = normalizeBase(baseUrl);
 
   static const _timeout = Duration(seconds: 30);
+  // Photo uploads on slow Wi-Fi need longer. Giving up early is worse than
+  // waiting: the post may still be created and a retry would duplicate it.
+  static const _uploadTimeout = Duration(seconds: 120);
+
+  /// Tidies a typed server address: "192.168.1.20:8000/" becomes
+  /// "http://192.168.1.20:8000".
+  static String normalizeBase(String input) {
+    var value = input.trim();
+    while (value.endsWith('/')) {
+      value = value.substring(0, value.length - 1);
+    }
+    if (value.isEmpty) return value;
+    final lower = value.toLowerCase();
+    if (!lower.startsWith('http://') && !lower.startsWith('https://')) value = 'http://$value';
+    return value;
+  }
 
   Uri _uri(String path, [Map<String, dynamic>? query]) {
-    final base = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+    final base = normalizeBase(baseUrl);
     final params = <String, String>{};
     query?.forEach((key, value) {
       if (value != null && value.toString().isNotEmpty) params[key] = value.toString();
@@ -71,21 +87,36 @@ class ApiClient {
         if (token != null) 'Authorization': 'Token $token',
       };
 
-  Future<dynamic> _send(Future<http.Response> Function() request) async {
+  // Used for log in and sign up, which must work even if an old token is saved.
+  static const Map<String, String> _publicHeaders = {'Accept': 'application/json'};
+
+  Future<dynamic> _send(
+    Future<http.Response> Function() request, {
+    Duration timeout = _timeout,
+    bool withToken = true,
+  }) async {
+    final tokenAtSend = withToken ? token : null;
     http.Response response;
     try {
-      response = await request().timeout(_timeout);
+      response = await request().timeout(timeout);
     } on SocketException {
       throw ApiException("Can't reach the server at $baseUrl. Check your connection and the server address.");
     } on TimeoutException {
       throw ApiException('The server took too long to answer. Try again.');
     } on http.ClientException catch (e) {
-      throw ApiException("Can't reach the server: ${e.message}");
+      throw ApiException("Can't reach the server at $baseUrl: ${e.message}");
+    } on FormatException {
+      throw ApiException('The server address "$baseUrl" doesn\'t look right. It should be like http://192.168.1.20:8000');
+    } catch (_) {
+      throw ApiException("Couldn't contact the server at $baseUrl.");
     }
-    return _decode(response.statusCode, response.bodyBytes);
+    // Only treat "not authorised" as "you were logged out" when this request
+    // really carried the token that is still in use.
+    final signedOut = response.statusCode == 401 && tokenAtSend != null && tokenAtSend == token;
+    return _decode(response.statusCode, response.bodyBytes, signedOut: signedOut);
   }
 
-  dynamic _decode(int statusCode, List<int> bytes) {
+  dynamic _decode(int statusCode, List<int> bytes, {bool signedOut = false}) {
     dynamic data;
     if (bytes.isNotEmpty) {
       try {
@@ -96,7 +127,7 @@ class ApiClient {
     }
     if (statusCode >= 200 && statusCode < 300) return data;
 
-    if (statusCode == 401) onUnauthorized?.call();
+    if (signedOut) onUnauthorized?.call();
     var message = 'Something went wrong (error $statusCode).';
     final fields = <String, dynamic>{};
     if (data is Map<String, dynamic>) {
@@ -127,6 +158,15 @@ class ApiClient {
         body: jsonEncode(body ?? {}),
       ));
 
+  Future<dynamic> _postPublic(String path, Map<String, dynamic> body) => _send(
+        () => http.post(
+          _uri(path),
+          headers: {..._publicHeaders, 'Content-Type': 'application/json'},
+          body: jsonEncode(body),
+        ),
+        withToken: false,
+      );
+
   Future<dynamic> _patch(String path, Map<String, dynamic> body) => _send(() => http.patch(
         _uri(path),
         headers: {..._headers, 'Content-Type': 'application/json'},
@@ -143,7 +183,7 @@ class ApiClient {
   // ---------------------------------------------------------------- auth ---
 
   Future<(String, AppUser)> login(String username, String password) async {
-    final data = await _post('/api/auth/login/', {'username': username, 'password': password});
+    final data = await _postPublic('/api/auth/login/', {'username': username, 'password': password});
     return (data['token'] as String, AppUser.fromJson(data['user'] as Map<String, dynamic>));
   }
 
@@ -153,7 +193,7 @@ class ApiClient {
     required String password,
     String displayName = '',
   }) async {
-    final data = await _post('/api/auth/register/', {
+    final data = await _postPublic('/api/auth/register/', {
       'username': username,
       'email': email,
       'password': password,
@@ -172,7 +212,10 @@ class ApiClient {
     }
   }
 
-  Future<AppMeta> meta() async => AppMeta.fromJson(await _get('/api/meta/') as Map<String, dynamic>);
+  Future<AppMeta> meta() async {
+    final data = await _send(() => http.get(_uri('/api/meta/'), headers: _publicHeaders), withToken: false);
+    return AppMeta.fromJson(data as Map<String, dynamic>);
+  }
 
   // --------------------------------------------------------------- posts ---
 
@@ -215,10 +258,18 @@ class ApiClient {
     return (data as List).map((e) => Post.fromJson(e as Map<String, dynamic>)).toList();
   }
 
-  Future<Post> post(int id) async => Post.fromJson(await _get('/api/posts/$id/') as Map<String, dynamic>);
+  /// One post. Pass your position to also get "x m away" filled in.
+  Future<Post> post(int id, {double? lat, double? lng}) async =>
+      Post.fromJson(await _get('/api/posts/$id/', {'lat': lat, 'lng': lng}) as Map<String, dynamic>);
 
   Future<Post> createPost(NewPost draft) async {
-    final request = http.MultipartRequest('POST', _uri('/api/posts/'))..headers.addAll(_headers);
+    final Uri target;
+    try {
+      target = _uri('/api/posts/');
+    } on FormatException {
+      throw ApiException('The server address "$baseUrl" doesn\'t look right.');
+    }
+    final request = http.MultipartRequest('POST', target)..headers.addAll(_headers);
     void field(String key, Object? value) {
       if (value != null && value.toString().isNotEmpty) request.fields[key] = value.toString();
     }
@@ -248,7 +299,7 @@ class ApiClient {
     final data = await _send(() async {
       final streamed = await request.send();
       return http.Response.fromStream(streamed);
-    });
+    }, timeout: _uploadTimeout);
     return Post.fromJson(data as Map<String, dynamic>);
   }
 

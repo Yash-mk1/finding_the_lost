@@ -54,7 +54,7 @@ The API is at http://localhost:8000/api/ and the moderation admin at http://loca
 
 ### Option B: Without Docker
 
-You need Python 3.11+, PostgreSQL with PostGIS, and GDAL.
+You need Python 3.12+, PostgreSQL with PostGIS, and GDAL.
 
 - **Ubuntu/Debian:** `sudo apt install postgresql postgis gdal-bin`
 - **macOS:** `brew install postgresql postgis gdal`
@@ -84,7 +84,7 @@ python manage.py runserver 0.0.0.0:8000
 python manage.py test lostfound
 ```
 
-26 tests cover auth, photo cleaning, blur enforcement, location privacy, the feed and map queries, the whole claim flow, votes, comments, reports and permissions.
+36 tests cover auth, photo cleaning, blur enforcement, location privacy, the feed and map queries, the whole claim flow, votes, comments, reports, permissions, and a set of hardening checks (bad input, stale logins, zoomed-out maps).
 
 ## 2. Run the Android app
 
@@ -138,6 +138,16 @@ flutter build apk --release --dart-define=API_BASE=http://<your-server>:8000
 | GET | `/api/me/posts/`, `/api/me/claims/` | |
 
 Send `Authorization: Token <token>` on authenticated calls.
+
+## Before putting this on the public internet
+
+The project is set up for a class demo on a laptop and phones on the same Wi-Fi. For a public server, do these first:
+
+- **HTTPS.** The app talks plain `http://` on the local network, so passwords are not encrypted in transit. Put the API behind HTTPS (for example Caddy or Nginx with a free certificate) and use an `https://` server address.
+- **Secrets.** Set `DJANGO_DEBUG=false`, a long random `DJANGO_SECRET_KEY` (the server refuses to start without one when debug is off), a real `POSTGRES_PASSWORD`, and `DJANGO_ALLOWED_HOSTS` to your domain.
+- **Demo accounts.** Don't run `seed_demo` on a public server: its accounts share a known password.
+- **Sign-up checks.** Accounts are not verified by email or phone yet, so one person can make several. That matters for claims and for the "3 reports hide a post" rule. Add OTP verification (see v2 ideas).
+- **Signing key.** `app/ci/debug.keystore` is a public test key. Create a private key for a Play Store release.
 
 ## Next steps (v2 ideas)
 
