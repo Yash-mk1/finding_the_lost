@@ -5,7 +5,7 @@ from django.views.static import serve
 from rest_framework.routers import DefaultRouter
 
 from accounts.views import LoginView, LogoutView, MeView, RegisterView, ResendCodeView, VerifyEmailView
-from lostfound.views import ClaimViewSet, MyClaimsViewSet, MyPostsViewSet, PostViewSet, meta
+from lostfound.views import ClaimViewSet, MyClaimsViewSet, MyPostsViewSet, PostViewSet, health, meta
 
 router = DefaultRouter()
 router.register("posts", PostViewSet, basename="post")
@@ -24,14 +24,15 @@ urlpatterns = [
     path("api/auth/logout/", LogoutView.as_view()),
     path("api/auth/me/", MeView.as_view()),
     path("api/meta/", meta),
+    path("api/health/", health),
     path("api/", include(router.urls)),
 ]
 
 # Uploaded photos, and the admin's CSS/JS (collected by `collectstatic`).
 # Django only serves these by itself under `runserver`, so under gunicorn they
 # are served explicitly; put Nginx or a CDN in front for real traffic.
+# With S3_BUCKET set, photos are served by the storage service instead.
 if settings.DEBUG or settings.SERVE_MEDIA:
-    urlpatterns += [
-        re_path(r"^media/(?P<path>.*)$", serve, {"document_root": settings.MEDIA_ROOT}),
-        re_path(r"^static/(?P<path>.*)$", serve, {"document_root": settings.STATIC_ROOT}),
-    ]
+    if not settings.S3_BUCKET:
+        urlpatterns.append(re_path(r"^media/(?P<path>.*)$", serve, {"document_root": settings.MEDIA_ROOT}))
+    urlpatterns.append(re_path(r"^static/(?P<path>.*)$", serve, {"document_root": settings.STATIC_ROOT}))

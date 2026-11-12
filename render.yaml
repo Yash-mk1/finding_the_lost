@@ -1,0 +1,61 @@
+# Render Blueprint: Render reads this file when you choose
+# New > Blueprint and pick this repository. It creates the API server from
+# backend/Dockerfile on Render's free plan. The database and photos live on
+# Supabase (Render's free database is deleted after 30 days). See README,
+# "Host it online (Render + Supabase)".
+services:
+  - type: web
+    name: finding-the-lost
+    runtime: docker
+    plan: free
+    region: singapore          # closest Render region to India
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health/
+    autoDeploy: true
+    buildFilter:
+      paths:
+        - backend/**
+    envVars:
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DJANGO_DEBUG
+        value: "false"
+      - key: DJANGO_ALLOWED_HOSTS
+        value: ".onrender.com"
+      - key: WEB_CONCURRENCY
+        value: "2"
+      # Supabase: Connect > Session pooler connection string, with your
+      # database password filled in.
+      - key: DATABASE_URL
+        sync: false
+      # Supabase Storage (S3 access keys and a public bucket named "photos").
+      - key: S3_BUCKET
+        value: photos
+      - key: S3_ENDPOINT_URL
+        sync: false
+      - key: S3_PUBLIC_DOMAIN
+        sync: false
+      - key: S3_REGION
+        value: ap-south-1
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      # Admin account for the moderation page at /admin/.
+      - key: DJANGO_SUPERUSER_USERNAME
+        sync: false
+      - key: DJANGO_SUPERUSER_EMAIL
+        sync: false
+      - key: DJANGO_SUPERUSER_PASSWORD
+        sync: false
+      # Sign-up codes by email through Brevo. Leave BREVO_API_KEY empty to
+      # print the codes in Render's Logs tab instead.
+      - key: BREVO_API_KEY
+        sync: false
+      - key: DEFAULT_FROM_EMAIL
+        sync: false
+      # Demo users and posts (password demo-pass-123). Set to false once real
+      # people use the app.
+      - key: SEED_DEMO
+        value: "true"

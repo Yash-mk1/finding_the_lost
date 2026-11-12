@@ -13,7 +13,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 def env(name, default=None):
-    return os.environ.get(name, default)
+    """An environment variable; empty counts as not set (hosting dashboards
+    often create empty values for fields you leave blank)."""
+    value = os.environ.get(name)
+    return default if value is None or value.strip() == "" else value
 
 
 def env_bool(name, default=False):
@@ -83,16 +86,31 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.contrib.gis.db.backends.postgis",
-        "NAME": env("POSTGRES_DB", "ftl"),
-        "USER": env("POSTGRES_USER", "ftl"),
-        "PASSWORD": env("POSTGRES_PASSWORD", "ftl"),
-        "HOST": env("POSTGRES_HOST", "localhost"),
-        "PORT": env("POSTGRES_PORT", "5432"),
+# One DATABASE_URL (hosted setups such as Supabase) or the separate POSTGRES_*
+# values (docker-compose, local Postgres).
+if env("DATABASE_URL"):
+    import dj_database_url
+
+    DATABASES = {
+        "default": dj_database_url.parse(
+            env("DATABASE_URL"),
+            engine="django.contrib.gis.db.backends.postgis",
+            conn_max_age=int(env("DB_CONN_MAX_AGE", "60")),
+            conn_health_checks=True,
+            ssl_require=env_bool("DB_SSL_REQUIRE", True),
+        )
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.contrib.gis.db.backends.postgis",
+            "NAME": env("POSTGRES_DB", "ftl"),
+            "USER": env("POSTGRES_USER", "ftl"),
+            "PASSWORD": env("POSTGRES_PASSWORD", "ftl"),
+            "HOST": env("POSTGRES_HOST", "localhost"),
+            "PORT": env("POSTGRES_PORT", "5432"),
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -110,8 +128,42 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = Path(env("MEDIA_ROOT", str(BASE_DIR / "media")))
-# Let Django serve uploaded photos and the admin's CSS itself (fine for a class
-# demo; use a CDN or Nginx in real production).
+
+# Photos go to S3-compatible object storage when S3_BUCKET is set (Supabase
+# Storage on the hosted setup), because hosts like Render's free tier wipe
+# the server's own disk on every restart. Without it they're kept on disk.
+S3_BUCKET = env("S3_BUCKET", "")
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+}
+if S3_BUCKET:
+    # Newer boto3 adds checksum headers that some S3-compatible services
+    # (Supabase, R2, MinIO) reject; only send them when a request needs them.
+    os.environ.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
+    os.environ.setdefault("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
+    STORAGES["default"] = {
+        "BACKEND": "storages.backends.s3.S3Storage",
+        "OPTIONS": {
+            "bucket_name": S3_BUCKET,
+            "endpoint_url": env("S3_ENDPOINT_URL"),
+            "access_key": env("S3_ACCESS_KEY_ID"),
+            "secret_key": env("S3_SECRET_ACCESS_KEY"),
+            "region_name": env("S3_REGION", "ap-south-1"),
+            "signature_version": "s3v4",
+            "addressing_style": "path",
+            "default_acl": None,
+            "file_overwrite": False,
+            # Public bucket: photo links are plain URLs that never expire.
+            "querystring_auth": False,
+            # e.g. <project>.supabase.co/storage/v1/object/public/<bucket>
+            "custom_domain": env("S3_PUBLIC_DOMAIN") or None,
+            "object_parameters": {"CacheControl": "public, max-age=31536000, immutable"},
+        },
+    }
+
+# Let Django serve uploaded photos (when on disk) and the admin's CSS itself
+# (fine for a class project; use a CDN or Nginx for heavy traffic).
 SERVE_MEDIA = env_bool("SERVE_MEDIA", True)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -159,10 +211,16 @@ EMAIL_HOST_USER = env("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
 EMAIL_TIMEOUT = 15
-EMAIL_BACKEND = env(
-    "EMAIL_BACKEND",
-    "django.core.mail.backends.smtp.EmailBackend" if EMAIL_HOST_USER else "django.core.mail.backends.console.EmailBackend",
-)
+# Brevo sends over HTTPS, for hosts that block email ports (Render's free
+# tier blocks 25, 465 and 587). Its sender address must be verified in Brevo.
+BREVO_API_KEY = env("BREVO_API_KEY", "")
+if BREVO_API_KEY:
+    _default_backend = "accounts.email_backends.BrevoEmailBackend"
+elif EMAIL_HOST_USER:
+    _default_backend = "django.core.mail.backends.smtp.EmailBackend"
+else:
+    _default_backend = "django.core.mail.backends.console.EmailBackend"
+EMAIL_BACKEND = env("EMAIL_BACKEND", _default_backend)
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", f"Finding the Lost <{EMAIL_HOST_USER or 'no-reply@localhost'}>")
 
 # ---------------------------------------------------------------- HTTPS ---

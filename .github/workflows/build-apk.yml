@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       api_base:
-        description: "Server address baked into the app, e.g. http://192.168.1.20:8000 (can also be changed on the app's login screen)"
+        description: "Server address baked into the app (leave empty to use the API_BASE repository variable)"
         required: false
         default: ""
 
@@ -104,7 +104,9 @@ jobs:
 
       - name: Build APK
         env:
-          API_BASE: ${{ github.event.inputs.api_base }}
+          # A manual run's address wins; otherwise the repository variable
+          # API_BASE; otherwise the address written in app/lib/session.dart.
+          API_BASE: ${{ github.event.inputs.api_base || vars.API_BASE }}
         run: |
           args=(--release --build-number="$GITHUB_RUN_NUMBER")
           if [ -n "$API_BASE" ]; then

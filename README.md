@@ -114,13 +114,32 @@ docker compose run --rm api python -c "import secrets; print(secrets.token_urlsa
 ```
 
 
+### Host it online (Render + Supabase, free)
+
+For a fixed `https://` address that works 24/7 without your laptop:
+
+| Service | Does | Free limits that matter |
+|---|---|---|
+| Render | runs the API from `backend/Dockerfile` (set up by `render.yaml`) | sleeps after 15 min without traffic; disk wiped on restart; email ports blocked |
+| Supabase | database (PostGIS) and photo storage | 500 MB database, 1 GB photos; pauses after a week with no database activity |
+| UptimeRobot | calls `/api/health/` every 5 min | keeps Render awake, and the health check touches the database, so Supabase stays awake too |
+| Brevo (optional) | sends sign-up codes over HTTPS | 300 emails a day |
+
+The server reads its settings from Render's **Environment** tab (see the hosted block in `.env.example`). On every start it runs migrations, creates the admin account from `DJANGO_SUPERUSER_*`, and adds demo data once if `SEED_DEMO=true`. Without `BREVO_API_KEY`, sign-up codes appear in Render's **Logs** tab.
+
+Notes:
+- Use Supabase's **Session pooler** connection string. Render can't reach Supabase's direct connection (IPv6 only).
+- Enable the `postgis` extension in Supabase (**Database > Extensions**) before the first deploy.
+- The `photos` bucket must be **public**, so photo links work in the app.
+- Point the app at the Render address with the `API_BASE` repository variable, then rebuild.
+
 ### Tests
 
 ```bash
 python manage.py test lostfound
 ```
 
-49 tests cover sign-up email codes, auth, photo cleaning, blur enforcement, location privacy, the feed and map queries, the whole claim flow, votes, comments, reports, permissions, and a set of hardening checks (bad input, stale logins, zoomed-out maps).
+56 tests cover sign-up email codes, auth, photo cleaning, blur enforcement, location privacy, the feed and map queries, the whole claim flow, votes, comments, reports, permissions, hardening checks (bad input, stale logins, zoomed-out maps) and the hosting pieces (health check, startup admin, Brevo email).
 
 ## 2. Run the Android app
 
@@ -137,8 +156,9 @@ flutter run
 
 **Pointing the app at your server**
 
-- **Emulator:** works as-is; `10.0.2.2` is the emulator's name for your computer.
-- **Real phone on the same Wi-Fi:** find your computer's IP (`ipconfig` on Windows, `ip addr` on Linux, System Settings on macOS), then either run `flutter run --dart-define=API_BASE=http://192.168.1.20:8000` or tap the server icon on the login screen and enter it there.
+The server address is built into the app, so users never set it. GitHub builds use the repository variable `API_BASE` (repo **Settings > Secrets and variables > Actions > Variables**); without it, the address in `app/lib/session.dart` is used. When your tunnel address changes, update that variable and re-run the build. Phones pick up the new address when they install the update.
+
+For testing, there's a hidden server setting: tap the logo on the login screen 7 times quickly.
 
 **Build an APK to install on any phone**
 

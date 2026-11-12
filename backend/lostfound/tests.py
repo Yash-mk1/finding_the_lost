@@ -417,11 +417,13 @@ class HardeningTests(ApiTestCase):
 
     def test_photo_file_is_deleted_with_the_post(self):
         post = self.create_found(handover=Handover.LEFT_THERE)
-        path = Post.objects.get(pk=post["id"]).images.first().image.path
-        self.assertTrue(os.path.exists(path))
+        from django.core.files.storage import default_storage
+
+        name = Post.objects.get(pk=post["id"]).images.first().image.name
+        self.assertTrue(default_storage.exists(name))
         self.as_user(self.finder)
         self.assertEqual(self.client.delete(f"/api/posts/{post['id']}/").status_code, 204)
-        self.assertFalse(os.path.exists(path))
+        self.assertFalse(default_storage.exists(name))
 
     def test_kept_item_exact_point_never_in_lists_or_map(self):
         post = self.create_found(handover=Handover.KEPT)
@@ -597,9 +599,139 @@ class RevokeClaimTests(ApiTestCase):
 
 class HttpsProxyTests(ApiTestCase):
     def test_photo_links_use_https_behind_a_tunnel(self):
+        from django.conf import settings
+
+        if settings.S3_BUCKET:
+            self.skipTest("photos are served by the storage service, not this server")
         post = self.create_found(handover=Handover.LEFT_THERE)
         self.anonymous()
         data = self.client.get(
             f"/api/posts/{post['id']}/", HTTP_X_FORWARDED_PROTO="https", HTTP_HOST="demo.trycloudflare.com"
         ).data
         self.assertTrue(data["images"][0]["url"].startswith("https://demo.trycloudflare.com/media/"))
+
+
+class HostingTests(ApiTestCase):
+    """Pieces used by the hosted setup (Render + Supabase)."""
+
+    def test_health_check_answers_without_auth(self):
+        res = self.client.get("/api/health/", HTTP_AUTHORIZATION="Token stale-token")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json(), {"status": "ok"})
+
+    def test_health_check_reports_database_failure(self):
+        from unittest import mock
+
+        with mock.patch("django.db.backends.utils.CursorWrapper.execute", side_effect=Exception("down")):
+            res = self.client.get("/api/health/")
+        self.assertEqual(res.status_code, 503)
+
+    def test_prepare_server_creates_and_updates_admin(self):
+        from unittest import mock
+
+        from django.core.management import call_command
+
+        env = {
+            "DJANGO_SUPERUSER_USERNAME": "boss",
+            "DJANGO_SUPERUSER_PASSWORD": "first-pass-123",
+            "DJANGO_SUPERUSER_EMAIL": "boss@example.com",
+        }
+        with mock.patch.dict(os.environ, env):
+            call_command("prepare_server", stdout=io.StringIO())
+            call_command("prepare_server", stdout=io.StringIO())  # safe to repeat
+        User = get_user_model()
+        boss = User.objects.get(username="boss")
+        self.assertTrue(boss.is_superuser and boss.is_staff)
+        self.assertTrue(boss.check_password("first-pass-123"))
+        old_hash = boss.password
+
+        with mock.patch.dict(os.environ, {**env, "DJANGO_SUPERUSER_PASSWORD": "second-pass-456"}):
+            call_command("prepare_server", stdout=io.StringIO())
+        boss.refresh_from_db()
+        self.assertTrue(boss.check_password("second-pass-456"))
+        self.assertNotEqual(boss.password, old_hash)
+        # The admin can log in to the app without an email code.
+        res = self.client.post("/api/auth/login/", {"username": "boss", "password": "second-pass-456"})
+        self.assertEqual(res.status_code, 200)
+
+    def test_prepare_server_does_nothing_without_settings(self):
+        from unittest import mock
+
+        from django.core.management import call_command
+
+        clean = {k: v for k, v in os.environ.items() if not k.startswith(("DJANGO_SUPERUSER_", "SEED_DEMO"))}
+        before = get_user_model().objects.count()
+        with mock.patch.dict(os.environ, clean, clear=True):
+            call_command("prepare_server", stdout=io.StringIO())
+        self.assertEqual(get_user_model().objects.count(), before)
+
+    def test_prepare_server_seeds_demo_once(self):
+        from unittest import mock
+
+        from django.core.management import call_command
+
+        with mock.patch.dict(os.environ, {"SEED_DEMO": "true"}):
+            call_command("prepare_server", stdout=io.StringIO())
+            count = Post.objects.count()
+            call_command("prepare_server", stdout=io.StringIO())
+        self.assertGreater(count, 0)
+        self.assertEqual(Post.objects.count(), count)
+
+    def test_brevo_backend_sends_code_over_https(self):
+        from unittest import mock
+
+        from django.test import override_settings
+
+        captured = {}
+
+        class FakeResponse:
+            status = 201
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def fake_urlopen(request, timeout):
+            captured["url"] = request.full_url
+            captured["headers"] = dict(request.header_items())
+            captured["body"] = json.loads(request.data)
+            return FakeResponse()
+
+        with override_settings(
+            EMAIL_BACKEND="accounts.email_backends.BrevoEmailBackend",
+            BREVO_API_KEY="xkeysib-test",
+            DEFAULT_FROM_EMAIL="Finding the Lost <sender@example.com>",
+        ), mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            res = self.client.post(
+                "/api/auth/register/",
+                {"username": "newbie", "email": "newbie@example.com", "password": "a-good-pass-987"},
+            )
+        self.assertEqual(res.status_code, 201, res.content)
+        self.assertEqual(captured["url"], "https://api.brevo.com/v3/smtp/email")
+        self.assertEqual(captured["headers"].get("Api-key"), "xkeysib-test")
+        body = captured["body"]
+        self.assertEqual(body["sender"], {"email": "sender@example.com", "name": "Finding the Lost"})
+        self.assertEqual(body["to"], [{"email": "newbie@example.com"}])
+        self.assertRegex(body["subject"], r"\d{6}")
+
+    def test_brevo_failure_is_reported_not_crashed(self):
+        import urllib.error
+        from unittest import mock
+
+        from django.test import override_settings
+
+        error = urllib.error.HTTPError(
+            "https://api.brevo.com/v3/smtp/email", 401, "Unauthorized", {}, io.BytesIO(b'{"message":"bad key"}')
+        )
+        with override_settings(
+            EMAIL_BACKEND="accounts.email_backends.BrevoEmailBackend", BREVO_API_KEY="wrong"
+        ), mock.patch("urllib.request.urlopen", side_effect=error):
+            res = self.client.post(
+                "/api/auth/register/",
+                {"username": "unlucky", "email": "unlucky@example.com", "password": "a-good-pass-987"},
+            )
+        # The account is kept and the app is told to offer "Send a new code".
+        self.assertEqual(res.status_code, 201, res.content)
+        self.assertTrue(res.json().get("email_failed"), res.content)

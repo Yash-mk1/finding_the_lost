@@ -430,3 +430,21 @@ def meta(request):
             "post_lifetime_days": settings.FTL["POST_LIFETIME_DAYS"],
         }
     )
+
+
+def health(request):
+    """
+    Uptime check: answers 200 only if the database answers too. Pinging it
+    every few minutes keeps a free Render server from sleeping and a free
+    Supabase database from pausing. Plain Django view: no auth, no throttle.
+    """
+    from django.db import connection
+    from django.http import JsonResponse
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+    except Exception:
+        return JsonResponse({"status": "database unavailable"}, status=503)
+    return JsonResponse({"status": "ok"})

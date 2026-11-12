@@ -5,11 +5,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'api.dart';
 import 'models.dart';
 
-/// Default server address. 10.0.2.2 is how the Android emulator reaches the
-/// computer it runs on. For a real phone, build with
-///   flutter run --dart-define=API_BASE=http://<your-pc-ip>:8000
-/// or change it from the login screen.
-const String kDefaultApiBase = String.fromEnvironment('API_BASE', defaultValue: 'http://10.0.2.2:8000');
+/// Built-in server address. GitHub builds take it from the repository
+/// variable API_BASE (Settings > Secrets and variables > Actions > Variables),
+/// so a new tunnel address only needs that variable changed and a re-run.
+/// Local builds can override it with
+///   flutter run --dart-define=API_BASE=https://<your-server>
+/// Users never need to change it; a hidden setting exists for testing (tap the
+/// logo on the login screen 7 times).
+const String kDefaultApiBase = String.fromEnvironment(
+  'API_BASE',
+  defaultValue: 'https://sunset-offer-ghz-description.trycloudflare.com',
+);
 
 /// App-wide state: who is signed in, the API client and the server's choices.
 class Session extends ChangeNotifier {
@@ -26,6 +32,13 @@ class Session extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       savedBase = prefs.getString('api_base');
+      // A hand-entered address only applies to the build it was entered in.
+      // When an update ships a new built-in address, use the new one.
+      if (prefs.getString('api_base_build_default') != kDefaultApiBase) {
+        savedBase = null;
+        await prefs.remove('api_base');
+        await prefs.setString('api_base_build_default', kDefaultApiBase);
+      }
       savedToken = prefs.getString('token');
     } catch (_) {
       // Storage unavailable: start signed out rather than hang on the splash.
@@ -60,7 +73,12 @@ class Session extends ChangeNotifier {
   Future<void> setServer(String baseUrl) async {
     api.baseUrl = ApiClient.normalizeBase(baseUrl);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('api_base', api.baseUrl);
+    if (api.baseUrl == ApiClient.normalizeBase(kDefaultApiBase)) {
+      await prefs.remove('api_base');
+    } else {
+      await prefs.setString('api_base', api.baseUrl);
+    }
+    await prefs.setString('api_base_build_default', kDefaultApiBase);
     await loadMeta();
     notifyListeners();
   }
@@ -81,8 +99,12 @@ class Session extends ChangeNotifier {
 
   /// Signs up. Returns null when signed in, or the pending email check.
   Future<PendingVerification?> register(String username, String email, String password, String displayName) async {
-    final (token, newUser, pending) =
-        await api.register(username: username, email: email, password: password, displayName: displayName);
+    final (token, newUser, pending) = await api.register(
+      username: username,
+      email: email,
+      password: password,
+      displayName: displayName,
+    );
     if (token != null && newUser != null) {
       await _store(token, newUser);
       return null;

@@ -5,3 +5,5 @@ djangorestframework>=3.16,<3.19
 Pillow>=11,<13
 psycopg[binary]>=3.2,<4
 gunicorn>=23,<26
+dj-database-url>=2.3,<4
+django-storages[s3]>=1.14,<2

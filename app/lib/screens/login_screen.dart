@@ -31,6 +31,10 @@ class _LoginScreenState extends State<LoginScreen> {
   PendingVerification? _pending;
   String? _codeError;
   int _resendIn = 0;
+
+  // Hidden server setting: tap the logo 7 times within 3 seconds.
+  int _logoTaps = 0;
+  DateTime? _firstLogoTap;
   Timer? _resendTimer;
 
   @override
@@ -158,6 +162,20 @@ class _LoginScreenState extends State<LoginScreen> {
 
   // ------------------------------------------------------- server address ---
 
+  void _onLogoTap() {
+    final now = DateTime.now();
+    if (_firstLogoTap == null || now.difference(_firstLogoTap!) > const Duration(seconds: 3)) {
+      _firstLogoTap = now;
+      _logoTaps = 0;
+    }
+    _logoTaps++;
+    if (_logoTaps >= 7) {
+      _logoTaps = 0;
+      _firstLogoTap = null;
+      _editServer();
+    }
+  }
+
   Future<void> _editServer() async {
     final session = context.read<Session>();
     final controller = TextEditingController(text: session.api.baseUrl);
@@ -168,29 +186,32 @@ class _LoginScreenState extends State<LoginScreen> {
           final unencrypted = ApiClient.isUnencryptedPublic(controller.text);
           return AlertDialog(
             title: const Text('Server address'),
-            content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text(
-                'Emulator: http://10.0.2.2:8000\n'
-                'Phone on the same Wi-Fi: http://<your computer\'s IP>:8000\n'
-                'From anywhere: the https:// address from the tunnel',
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                keyboardType: TextInputType.url,
-                autofocus: true,
-                onChanged: (_) => setDialog(() {}),
-              ),
-              if (unencrypted) ...[
-                const SizedBox(height: 8),
-                Text(
-                  'This address is not encrypted: passwords would travel over the internet in plain text. '
-                  'Use an https:// address.',
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('For testing only. Normal users never need to change this.'),
+                const SizedBox(height: 4),
+                Text('Built-in: $kDefaultApiBase', style: Theme.of(context).textTheme.bodySmall),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  keyboardType: TextInputType.url,
+                  autofocus: true,
+                  onChanged: (_) => setDialog(() {}),
                 ),
+                if (unencrypted) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'This address is not encrypted: passwords would travel over the internet in plain text. '
+                    'Use an https:// address.',
+                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                  ),
+                ],
               ],
-            ]),
+            ),
             actions: [
+              TextButton(onPressed: () => Navigator.pop(context, kDefaultApiBase), child: const Text('Use built-in')),
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
               FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Save')),
             ],
@@ -215,9 +236,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(actions: [
-        IconButton(tooltip: 'Server address', icon: const Icon(Icons.dns_outlined), onPressed: _editServer),
-      ]),
+      appBar: AppBar(),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -230,132 +249,149 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Widget _codeStep(ThemeData theme, PendingVerification pending) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Icon(Icons.mark_email_unread_outlined, size: 64, color: theme.colorScheme.primary),
-      const SizedBox(height: 12),
-      Text('Check your email',
-          textAlign: TextAlign.center, style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700)),
-      const SizedBox(height: 8),
-      Text(
-        'We sent a 6-digit code to ${pending.emailHint}. It expires in 10 minutes. '
-        "Can't see it? Check spam.",
-        textAlign: TextAlign.center,
-        style: theme.textTheme.bodyMedium,
-      ),
-      const SizedBox(height: 24),
-      TextField(
-        controller: _code,
-        autofocus: true,
-        keyboardType: TextInputType.number,
-        textAlign: TextAlign.center,
-        maxLength: 6,
-        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-        style: theme.textTheme.headlineMedium?.copyWith(letterSpacing: 12, fontWeight: FontWeight.w600),
-        decoration: InputDecoration(counterText: '', hintText: '------', errorText: _codeError, errorMaxLines: 3),
-        onChanged: (value) {
-          if (value.length == 6 && !_busy) _verify();
-        },
-        onSubmitted: (_) => _verify(),
-      ),
-      const SizedBox(height: 20),
-      FilledButton(
-        onPressed: _busy ? null : _verify,
-        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-        child: _busy
-            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-            : const Text('Confirm'),
-      ),
-      const SizedBox(height: 8),
-      TextButton(
-        onPressed: _busy || _resendIn > 0 ? null : _resend,
-        child: Text(_resendIn > 0 ? 'Send a new code in ${_resendIn}s' : 'Send a new code'),
-      ),
-      TextButton(onPressed: _busy ? null : _backToLogin, child: const Text('Back to log in')),
-    ]);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Icon(Icons.mark_email_unread_outlined, size: 64, color: theme.colorScheme.primary),
+        const SizedBox(height: 12),
+        Text(
+          'Check your email',
+          textAlign: TextAlign.center,
+          style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'We sent a 6-digit code to ${pending.emailHint}. It expires in 10 minutes. '
+          "Can't see it? Check spam.",
+          textAlign: TextAlign.center,
+          style: theme.textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 24),
+        TextField(
+          controller: _code,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          textAlign: TextAlign.center,
+          maxLength: 6,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          style: theme.textTheme.headlineMedium?.copyWith(letterSpacing: 12, fontWeight: FontWeight.w600),
+          decoration: InputDecoration(counterText: '', hintText: '------', errorText: _codeError, errorMaxLines: 3),
+          onChanged: (value) {
+            if (value.length == 6 && !_busy) _verify();
+          },
+          onSubmitted: (_) => _verify(),
+        ),
+        const SizedBox(height: 20),
+        FilledButton(
+          onPressed: _busy ? null : _verify,
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+          child: _busy
+              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Text('Confirm'),
+        ),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: _busy || _resendIn > 0 ? null : _resend,
+          child: Text(_resendIn > 0 ? 'Send a new code in ${_resendIn}s' : 'Send a new code'),
+        ),
+        TextButton(onPressed: _busy ? null : _backToLogin, child: const Text('Back to log in')),
+      ],
+    );
   }
 
   Widget _loginForm(ThemeData theme) {
     return Form(
       key: _form,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Icon(Icons.travel_explore, size: 64, color: theme.colorScheme.primary),
-        const SizedBox(height: 12),
-        Text('Finding the Lost',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          GestureDetector(
+            onTap: _onLogoTap,
+            child: Icon(Icons.travel_explore, size: 64, color: theme.colorScheme.primary),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Finding the Lost',
             textAlign: TextAlign.center,
-            style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700)),
-        const SizedBox(height: 4),
-        Text('Found something? Lost something? Your neighbours can help.',
-            textAlign: TextAlign.center, style: theme.textTheme.bodyMedium),
-        const SizedBox(height: 28),
-        TextFormField(
-          controller: _username,
-          textInputAction: TextInputAction.next,
-          autocorrect: false,
-          decoration: InputDecoration(
-            labelText: _registering ? 'Username' : 'Username or email',
-            errorText: _serverError('username'),
+            style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700),
           ),
-          validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
-        ),
-        if (_registering) ...[
-          const SizedBox(height: 12),
+          const SizedBox(height: 4),
+          Text(
+            'Found something? Lost something? Your neighbours can help.',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 28),
           TextFormField(
-            controller: _email,
-            keyboardType: TextInputType.emailAddress,
+            controller: _username,
             textInputAction: TextInputAction.next,
+            autocorrect: false,
             decoration: InputDecoration(
-              labelText: 'Email',
-              helperText: "We'll send a code to confirm it's yours.",
-              errorText: _serverError('email'),
+              labelText: _registering ? 'Username' : 'Username or email',
+              errorText: _serverError('username'),
             ),
-            validator: (v) => (v == null || !v.contains('@')) ? 'Enter a valid email' : null,
+            validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
           ),
+          if (_registering) ...[
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _email,
+              keyboardType: TextInputType.emailAddress,
+              textInputAction: TextInputAction.next,
+              decoration: InputDecoration(
+                labelText: 'Email',
+                helperText: "We'll send a code to confirm it's yours.",
+                errorText: _serverError('email'),
+              ),
+              validator: (v) => (v == null || !v.contains('@')) ? 'Enter a valid email' : null,
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _displayName,
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(labelText: 'Display name (optional)'),
+            ),
+          ],
           const SizedBox(height: 12),
           TextFormField(
-            controller: _displayName,
-            textInputAction: TextInputAction.next,
-            decoration: const InputDecoration(labelText: 'Display name (optional)'),
-          ),
-        ],
-        const SizedBox(height: 12),
-        TextFormField(
-          controller: _password,
-          obscureText: _hidePassword,
-          onFieldSubmitted: (_) => _submit(),
-          decoration: InputDecoration(
-            labelText: 'Password',
-            errorText: _serverError('password') ?? _serverError('non_field_errors'),
-            errorMaxLines: 3,
-            suffixIcon: IconButton(
-              icon: Icon(_hidePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined),
-              onPressed: () => setState(() => _hidePassword = !_hidePassword),
+            controller: _password,
+            obscureText: _hidePassword,
+            onFieldSubmitted: (_) => _submit(),
+            decoration: InputDecoration(
+              labelText: 'Password',
+              errorText: _serverError('password') ?? _serverError('non_field_errors'),
+              errorMaxLines: 3,
+              suffixIcon: IconButton(
+                icon: Icon(_hidePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                onPressed: () => setState(() => _hidePassword = !_hidePassword),
+              ),
             ),
+            validator: (v) {
+              if (v == null || v.isEmpty) return 'Required';
+              if (_registering && v.length < 8) return 'At least 8 characters';
+              return null;
+            },
           ),
-          validator: (v) {
-            if (v == null || v.isEmpty) return 'Required';
-            if (_registering && v.length < 8) return 'At least 8 characters';
-            return null;
-          },
-        ),
-        const SizedBox(height: 20),
-        FilledButton(
-          onPressed: _busy ? null : _submit,
-          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-          child: _busy
-              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-              : Text(_registering ? 'Create account' : 'Log in'),
-        ),
-        const SizedBox(height: 8),
-        TextButton(
-          onPressed: _busy
-              ? null
-              : () => setState(() {
+          const SizedBox(height: 20),
+          FilledButton(
+            onPressed: _busy ? null : _submit,
+            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            child: _busy
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                : Text(_registering ? 'Create account' : 'Log in'),
+          ),
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: _busy
+                ? null
+                : () => setState(() {
                     _registering = !_registering;
                     _fieldErrors = {};
                   }),
-          child: Text(_registering ? 'I already have an account' : 'New here? Create an account'),
-        ),
-      ]),
+            child: Text(_registering ? 'I already have an account' : 'New here? Create an account'),
+          ),
+        ],
+      ),
     );
   }
 }
