@@ -223,7 +223,7 @@ class FeedScreenState extends State<FeedScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Finding the Lost'),
+        title: const Text('Findit'),
         actions: [
           IconButton(
             tooltip: 'Update my location',

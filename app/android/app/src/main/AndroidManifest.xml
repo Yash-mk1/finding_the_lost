@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Talk to the Finding the Lost API and load map tiles. -->
+    <!-- Talk to the Findit API and load map tiles. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Location is read only at the moment a photo is taken or the feed is
          opened; the app never tracks location in the background. -->
@@ -9,7 +9,7 @@
          app, and declaring CAMERA without granting it makes that intent fail. -->
 
     <application
-        android:label="Finding the Lost"
+        android:label="Findit"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">

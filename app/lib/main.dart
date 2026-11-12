@@ -20,17 +20,17 @@ void main() {
     wasSignedIn = session.signedIn;
   });
   session.init();
-  runApp(ChangeNotifierProvider.value(value: session, child: const FindingTheLostApp()));
+  runApp(ChangeNotifierProvider.value(value: session, child: const FinditApp()));
 }
 
-class FindingTheLostApp extends StatelessWidget {
-  const FindingTheLostApp({super.key});
+class FinditApp extends StatelessWidget {
+  const FinditApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     final scheme = ColorScheme.fromSeed(seedColor: const Color(0xFF2E7D5B));
     return MaterialApp(
-      title: 'Finding the Lost',
+      title: 'Findit',
       navigatorKey: _navigatorKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(

@@ -61,7 +61,7 @@ def demo_photo(label, colour):
     draw = ImageDraw.Draw(img)
     draw.rectangle([40, 40, 860, 635], outline="white", width=6)
     draw.text((70, 300), label[:40], fill="white")
-    draw.text((70, 340), "Finding the Lost - demo photo", fill="white")
+    draw.text((70, 340), "Findit - demo photo", fill="white")
     buffer = io.BytesIO()
     img.save(buffer, format="JPEG", quality=85)
     return ContentFile(buffer.getvalue(), name="demo.jpg")

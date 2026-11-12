@@ -1,4 +1,4 @@
-// Plain data classes for what the Finding the Lost API returns.
+// Plain data classes for what the Findit API returns.
 
 DateTime? _date(dynamic value) => value == null ? null : DateTime.tryParse(value as String)?.toLocal();
 

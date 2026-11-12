@@ -62,10 +62,10 @@ def send_code(user, force=False):
     code = f"{secrets.randbelow(1_000_000):06d}"
     try:
         send_mail(
-            subject=f"Your Finding the Lost code: {code}",
+            subject=f"Your Findit code: {code}",
             message=(
                 f"Hi {user.first_name or user.username},\n\n"
-                f"Your Finding the Lost verification code is {code}\n\n"
+                f"Your Findit verification code is {code}\n\n"
                 "It expires in 10 minutes. If you didn't sign up, you can ignore this email.\n"
             ),
             from_email=settings.DEFAULT_FROM_EMAIL,

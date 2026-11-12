@@ -1,5 +1,5 @@
 """
-Django settings for the Finding the Lost API.
+Django settings for the Findit API.
 
 Everything environment-specific is read from environment variables so the
 same file works on a laptop, in Docker and on a server. See .env.example.
@@ -221,7 +221,7 @@ elif EMAIL_HOST_USER:
 else:
     _default_backend = "django.core.mail.backends.console.EmailBackend"
 EMAIL_BACKEND = env("EMAIL_BACKEND", _default_backend)
-DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", f"Finding the Lost <{EMAIL_HOST_USER or 'no-reply@localhost'}>")
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", f"Findit <{EMAIL_HOST_USER or 'no-reply@localhost'}>")
 
 # ---------------------------------------------------------------- HTTPS ---
 # When the server sits behind an HTTPS proxy or tunnel (Cloudflare tunnel,

@@ -13,7 +13,7 @@ router.register("claims", ClaimViewSet, basename="claim")
 router.register("me/posts", MyPostsViewSet, basename="my-post")
 router.register("me/claims", MyClaimsViewSet, basename="my-claim")
 
-admin.site.site_header = "Finding the Lost — moderation"
+admin.site.site_header = "Findit — moderation"
 
 urlpatterns = [
     path("admin/", admin.site.urls),

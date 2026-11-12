@@ -113,7 +113,7 @@ jobs:
             args+=("--dart-define=API_BASE=$API_BASE")
           fi
           flutter build apk "${args[@]}"
-          cp build/app/outputs/flutter-apk/app-release.apk "finding-the-lost-$GITHUB_RUN_NUMBER.apk"
+          cp build/app/outputs/flutter-apk/app-release.apk "findit-$GITHUB_RUN_NUMBER.apk"
 
       # If you've added your private key as repository secrets (see README,
       # "Private signing key"), the APK is re-signed with it. Without the
@@ -126,7 +126,7 @@ jobs:
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          APK="finding-the-lost-$GITHUB_RUN_NUMBER.apk"
+          APK="findit-$GITHUB_RUN_NUMBER.apk"
           if [ -z "$RELEASE_KEYSTORE_BASE64" ]; then
             echo "::warning::No private signing key set up, so this APK is signed with the public test key. Fine for testing; see README to add your own key."
             {
@@ -163,8 +163,8 @@ jobs:
       - name: Upload APK (Actions artifact)
         uses: actions/upload-artifact@v4
         with:
-          name: finding-the-lost-apk
-          path: app/finding-the-lost-${{ github.run_number }}.apk
+          name: findit-apk
+          path: app/findit-${{ github.run_number }}.apk
 
       - name: Publish APK (GitHub release)
         uses: softprops/action-gh-release@v2
@@ -173,7 +173,7 @@ jobs:
           name: "App build #${{ github.run_number }}"
           prerelease: true
           body: |
-            Android test build of Finding the Lost from commit ${{ github.sha }}.
+            Android test build of Findit from commit ${{ github.sha }}.
             Open this page on your phone and tap the .apk to install
             (allow "Install unknown apps" for your browser when asked).
-          files: app/finding-the-lost-${{ github.run_number }}.apk
+          files: app/findit-${{ github.run_number }}.apk

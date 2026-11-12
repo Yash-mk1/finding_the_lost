@@ -702,7 +702,7 @@ class HostingTests(ApiTestCase):
         with override_settings(
             EMAIL_BACKEND="accounts.email_backends.BrevoEmailBackend",
             BREVO_API_KEY="xkeysib-test",
-            DEFAULT_FROM_EMAIL="Finding the Lost <sender@example.com>",
+            DEFAULT_FROM_EMAIL="Findit <sender@example.com>",
         ), mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
             res = self.client.post(
                 "/api/auth/register/",
@@ -712,7 +712,7 @@ class HostingTests(ApiTestCase):
         self.assertEqual(captured["url"], "https://api.brevo.com/v3/smtp/email")
         self.assertEqual(captured["headers"].get("Api-key"), "xkeysib-test")
         body = captured["body"]
-        self.assertEqual(body["sender"], {"email": "sender@example.com", "name": "Finding the Lost"})
+        self.assertEqual(body["sender"], {"email": "sender@example.com", "name": "Findit"})
         self.assertEqual(body["to"], [{"email": "newbie@example.com"}])
         self.assertRegex(body["subject"], r"\d{6}")
 

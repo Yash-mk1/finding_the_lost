@@ -311,7 +311,7 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
           const SizedBox(height: 12),
           Text(
-            'Finding the Lost',
+            'Findit',
             textAlign: TextAlign.center,
             style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700),
           ),

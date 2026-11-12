@@ -1,4 +1,4 @@
-# Finding the Lost
+# Findit
 
 A community lost-and-found app. A finder photographs an item, the phone tags where it was found, and the finder says what they did with it (left it there, gave it to the police, gave it to a desk, or kept it). Owners browse a Reddit-style feed or a map, and claim kept items by answering a question only the real owner would know.
 
@@ -213,7 +213,7 @@ Test builds are signed with the public key in `app/ci`, which is fine for testin
 
 1. In PowerShell, in a folder **outside** the project (for example `C:\keys`), run this. Replace `YOUR-PASSWORD` with a strong password you'll keep somewhere safe:
    ```powershell
-   docker run --rm -v ${PWD}:/keys -w /keys eclipse-temurin:21-jdk keytool -genkeypair -keystore release.keystore -storetype PKCS12 -alias release -keyalg RSA -keysize 2048 -validity 10000 -storepass YOUR-PASSWORD -dname "CN=Finding the Lost"
+   docker run --rm -v ${PWD}:/keys -w /keys eclipse-temurin:21-jdk keytool -genkeypair -keystore release.keystore -storetype PKCS12 -alias release -keyalg RSA -keysize 2048 -validity 10000 -storepass YOUR-PASSWORD -dname "CN=Findit"
    ```
 2. Copy it as text:
    ```powershell
