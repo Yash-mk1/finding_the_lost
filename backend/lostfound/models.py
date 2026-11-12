@@ -1,4 +1,5 @@
 import math
+import uuid
 import secrets
 from datetime import timedelta
 
@@ -164,7 +165,9 @@ class Post(models.Model):
 
 
 def post_image_path(instance, filename):
-    return f"posts/{instance.post_id}/{timezone.now():%Y%m%d%H%M%S%f}.jpg"
+    # Random names: with photos in a public bucket, nobody can guess the link
+    # of a photo they haven't been shown (for example on a hidden post).
+    return f"posts/{instance.post_id}/{uuid.uuid4().hex}.jpg"
 
 
 class PostImage(models.Model):
