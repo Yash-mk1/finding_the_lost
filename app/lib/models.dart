@@ -59,7 +59,7 @@ class Claim {
   final Author claimant;
   final String answer;
   final String message;
-  final String status; // pending | approved | rejected
+  final String status; // pending | approved | rejected | revoked
   final String finderResponse;
   final DateTime? createdAt;
   final DateTime? decidedAt;
@@ -79,6 +79,7 @@ class Claim {
 
   bool get isPending => status == 'pending';
   bool get isApproved => status == 'approved';
+  bool get isRevoked => status == 'revoked';
 
   factory Claim.fromJson(Map<String, dynamic> json) => Claim(
         id: json['id'] as int,

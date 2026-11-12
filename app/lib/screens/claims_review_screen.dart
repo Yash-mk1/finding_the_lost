@@ -63,6 +63,26 @@ class _ClaimsReviewScreenState extends State<ClaimsReviewScreen> {
     await _decide(claim, approve: false, response: response);
   }
 
+  Future<void> _revoke(Claim claim) async {
+    final reason = await promptText(
+      context,
+      title: 'Cancel approval for ${claim.claimant.displayName}?',
+      message: "They'll lose the exact location and the item opens for claims again. "
+          "They won't be able to claim it a second time.",
+      hint: "e.g. Didn't turn up / the answer was a lucky guess",
+      confirm: 'Cancel approval',
+      required: false,
+    );
+    if (reason == null) return;
+    try {
+      await _api.revokeClaim(claim.id, reason: reason);
+      if (mounted) showSnack(context, 'Approval cancelled. You can approve someone else now.');
+      await _load();
+    } on ApiException catch (e) {
+      if (mounted) showSnack(context, e.message, error: true);
+    }
+  }
+
   Future<void> _decide(Claim claim, {required bool approve, required String response}) async {
     try {
       await _api.decideClaim(claim.id, approve: approve, response: response);
@@ -118,10 +138,11 @@ class _ClaimsReviewScreenState extends State<ClaimsReviewScreen> {
 
   Widget _claimCard(Claim claim, bool anyApproved) {
     final theme = Theme.of(context);
-    final statusColor = switch (claim.status) {
-      'approved' => Colors.green,
-      'rejected' => Colors.red,
-      _ => Colors.orange,
+    final (statusColor, statusLabel) = switch (claim.status) {
+      'approved' => (Colors.green, 'APPROVED'),
+      'rejected' => (Colors.red, 'REJECTED'),
+      'revoked' => (Colors.grey, 'APPROVAL CANCELLED'),
+      _ => (Colors.orange, 'WAITING'),
     };
     return Card(
       child: Padding(
@@ -136,7 +157,7 @@ class _ClaimsReviewScreenState extends State<ClaimsReviewScreen> {
                 Text(timeAgo(claim.createdAt), style: theme.textTheme.bodySmall),
               ]),
             ),
-            Text(claim.status.toUpperCase(),
+            Text(statusLabel,
                 style: theme.textTheme.labelSmall?.copyWith(color: statusColor, fontWeight: FontWeight.w700)),
           ]),
           const SizedBox(height: 10),
@@ -162,6 +183,17 @@ class _ClaimsReviewScreenState extends State<ClaimsReviewScreen> {
                 child: const Text('Approve'),
               ),
             ]),
+          ],
+          if (claim.isApproved && widget.post.status != 'returned') ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                icon: const Icon(Icons.undo),
+                label: const Text('Cancel approval'),
+                onPressed: () => _revoke(claim),
+              ),
+            ),
           ],
         ]),
       ),

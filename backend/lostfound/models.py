@@ -211,6 +211,9 @@ class Claim(models.Model):
         PENDING = "pending", "Pending"
         APPROVED = "approved", "Approved"
         REJECTED = "rejected", "Rejected"
+        # The finder approved this claim, then took the approval back (e.g. it
+        # turned out to be the wrong person). The post is open for claims again.
+        REVOKED = "revoked", "Approval cancelled"
 
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="claims")
     claimant = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="claims")

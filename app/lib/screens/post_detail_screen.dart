@@ -384,6 +384,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
       final (icon, color, title) = switch (claim.status) {
         'approved' => (Icons.check_circle, Colors.green, 'The finder approved your claim'),
         'rejected' => (Icons.cancel, Colors.red, 'The finder didn\'t approve your claim'),
+        'revoked' => (Icons.undo, Colors.grey, 'The finder cancelled their approval'),
         _ => (Icons.hourglass_top, Colors.orange, 'Claim sent, waiting for the finder'),
       };
       return Card(

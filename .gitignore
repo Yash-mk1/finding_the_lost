@@ -17,3 +17,15 @@ app/android/.gradle/
 app/android/local.properties
 app/android/app/debug/
 app/android/app/release/
+
+# Signing keys: never commit a private key. (The public test key in app/ci is
+# the one exception.)
+*.jks
+*.keystore
+*.p12
+!app/ci/debug.keystore
+keystore-base64.txt
+
+# Zips of files sent over chat
+*.zip
+audit-fixes/

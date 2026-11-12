@@ -27,6 +27,20 @@ services:
       db:
         condition: service_healthy
 
+  # Optional: a free HTTPS address for the API, so passwords and photos are
+  # encrypted and phones can reach it from any network (not just your Wi-Fi).
+  # Start with:  docker compose --profile tunnel up
+  # Then find the https://....trycloudflare.com address in the "tunnel" logs
+  # and enter it on the app's login screen. It changes every time you restart.
+  tunnel:
+    # If Docker can't find this version, change it to cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.10.3
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate --url http://api:8000
+    depends_on:
+      - api
+    restart: unless-stopped
+
 volumes:
   pgdata:
   media:

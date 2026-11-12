@@ -1,11 +1,48 @@
+from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model, password_validation
+from django.db import transaction
 from django.db.models import Q
 from rest_framework import permissions, serializers, status
 from rest_framework.authtoken.models import Token
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .models import EmailVerification
+from .verification import (
+    EmailSendError,
+    VerificationError,
+    check_code,
+    free_stale_signups,
+    is_verified,
+    mask_email,
+    send_code,
+)
+
 User = get_user_model()
+
+
+def _verification_on():
+    return settings.FTL["REQUIRE_EMAIL_VERIFICATION"]
+
+
+def _token_response(user, status_code=status.HTTP_200_OK):
+    token, _ = Token.objects.get_or_create(user=user)
+    return Response({"token": token.key, "user": UserSerializer(user).data}, status=status_code)
+
+
+def _needs_verification_response(user, status_code, detail, wait_seconds=0, email_failed=False):
+    return Response(
+        {
+            "detail": detail,
+            "code": "email_unverified",
+            "verification_required": True,
+            "username": user.username,
+            "email_hint": mask_email(user.email),
+            "resend_in": wait_seconds,
+            "email_failed": email_failed,
+        },
+        status=status_code,
+    )
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -59,11 +96,30 @@ class RegisterView(APIView):
     throttle_scope = "auth"
 
     def post(self, request):
-        serializer = RegisterSerializer(data=request.data)
+        data = request.data if hasattr(request.data, "get") else {}
+        free_stale_signups(str(data.get("username") or ""), str(data.get("email") or ""))
+        serializer = RegisterSerializer(data=data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.save()
-        token, _ = Token.objects.get_or_create(user=user)
-        return Response({"token": token.key, "user": UserSerializer(user).data}, status=status.HTTP_201_CREATED)
+        if not _verification_on():
+            return _token_response(serializer.save(), status.HTTP_201_CREATED)
+
+        with transaction.atomic():
+            user = serializer.save()
+            EmailVerification.objects.create(user=user)
+        hint = mask_email(user.email)
+        try:
+            send_code(user, force=True)
+        except EmailSendError:
+            # The account exists; the person can ask for the code again once
+            # email is working.
+            return _needs_verification_response(
+                user, status.HTTP_201_CREATED,
+                "Your account was created, but we couldn't send the email. Tap 'Send a new code' to try again.",
+                email_failed=True,
+            )
+        return _needs_verification_response(
+            user, status.HTTP_201_CREATED, f"We've emailed a 6-digit code to {hint}. Enter it to finish signing up."
+        )
 
 
 class LoginView(APIView):
@@ -81,8 +137,77 @@ class LoginView(APIView):
         user = authenticate(request, username=match.username, password=password) if match else None
         if user is None:
             return Response({"detail": "Wrong username or password."}, status=status.HTTP_400_BAD_REQUEST)
-        token, _ = Token.objects.get_or_create(user=user)
-        return Response({"token": token.key, "user": UserSerializer(user).data})
+        if _verification_on() and not is_verified(user):
+            # Right password, but the email was never confirmed: send a code
+            # (unless one went out in the last minute) and ask for it.
+            try:
+                wait = send_code(user)
+            except EmailSendError:
+                return _needs_verification_response(
+                    user, status.HTTP_403_FORBIDDEN,
+                    "Confirm your email to log in. We couldn't send the email just now; tap 'Send a new code'.",
+                    email_failed=True,
+                )
+            return _needs_verification_response(
+                user, status.HTTP_403_FORBIDDEN,
+                f"Confirm your email to log in. Enter the 6-digit code we sent to {mask_email(user.email)}.",
+                wait_seconds=wait,
+            )
+        return _token_response(user)
+
+
+def _find_user(identifier):
+    identifier = str(identifier or "").strip()
+    if not identifier:
+        return None
+    return User.objects.filter(Q(username__iexact=identifier) | Q(email__iexact=identifier)).first()
+
+
+class VerifyEmailView(APIView):
+    """POST {username, code}: confirms the email and returns a login token."""
+
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
+    throttle_scope = "auth"
+
+    def post(self, request):
+        data = request.data if hasattr(request.data, "get") else {}
+        user = _find_user(data.get("username"))
+        if user is None:
+            return Response({"detail": "That code isn't right."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            check_code(user, data.get("code", ""))
+        except VerificationError as exc:
+            return Response({"detail": str(exc), "code": "bad_code"}, status=status.HTTP_400_BAD_REQUEST)
+        return _token_response(user)
+
+
+class ResendCodeView(APIView):
+    """POST {username}: emails a new code. Answers the same way whether or not
+    the account exists, so it can't be used to find out who has signed up."""
+
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
+    throttle_scope = "auth"
+
+    def post(self, request):
+        data = request.data if hasattr(request.data, "get") else {}
+        user = _find_user(data.get("username"))
+        wait = 0
+        if user is not None and not is_verified(user):
+            try:
+                wait = send_code(user)
+            except EmailSendError:
+                return Response(
+                    {"detail": "We couldn't send the email just now. Try again in a minute."},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+        if wait:
+            return Response(
+                {"detail": f"Please wait {wait} seconds before asking for another code.", "resend_in": wait},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+        return Response({"detail": "If that account needs confirming, a new code is on its way.", "resend_in": 60})
 
 
 class LogoutView(APIView):

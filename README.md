@@ -12,14 +12,14 @@ finding-the-lost/
 
 | Feature | Where |
 |---|---|
-| Sign up / log in with username or email (token auth) | `backend/accounts`, `app/lib/screens/login_screen.dart` |
+| Sign up with a 6-digit email code; log in with username or email (token auth) | `backend/accounts`, `app/lib/screens/login_screen.dart` |
 | Found posts: camera photo, GPS captured when the photo is taken, draggable pin, required landmark | `create_post_screen.dart` |
 | Handover options with owner guidance (left there / police / desk / kept) | `lostfound/models.py` `HANDOVER_GUIDANCE` |
 | Lost posts, so owners can post too | same screen, `postType: lost` |
 | Feed: near me, newest, top; filters by type, category, distance; search | `feed_screen.dart`, `GET /api/posts/` |
 | Map of posts in view, green = found, orange = lost | `map_screen.dart`, `GET /api/posts/map/` |
 | Upvotes and threaded comments | `post_detail_screen.dart` |
-| Claims with a verification question; finder approves with a private meetup message | `claims_review_screen.dart`, `/api/posts/{id}/claims/`, `/api/claims/{id}/decide/` |
+| Claims with a verification question; finder approves with a private meetup message, and can cancel an approval | `claims_review_screen.dart`, `/api/posts/{id}/claims/`, `/api/claims/{id}/decide/`, `/revoke/` |
 | My activity: my posts (with pending claims) and my claims | `activity_screen.dart` |
 | Report posts; 3 reports hide a post for review; Django admin for moderators | `/api/posts/{id}/report/`, `/admin/` |
 | Posts leave the feed after 30 days unless renewed; "mark returned" | `/renew/`, `/resolve/` |
@@ -31,7 +31,9 @@ finding-the-lost/
 - **Blur tool.** Draw boxes over ID numbers, card numbers or faces; the server blurs them before storing. Posts in the "ID / documents" category are refused until something is blurred.
 - **Approximate location for kept items.** If the finder took the item home, the public sees only a ~250 m area. The point is offset once and stored, and all searching uses that offset point, so distance queries can't be used to find the finder's home. The exact spot is shown only to the finder and to an approved claimant.
 - **No public phone numbers.** The finder sends meetup details only to the approved claimant.
-- **Rate limits** on login, sign-up, posting and claiming.
+- **Verified sign-ups.** New accounts confirm their email with a 6-digit code before they can log in (10-minute codes, 5 tries, one resend a minute).
+- **HTTPS option.** One command gives the server a free `https://` address (see *Use HTTPS*).
+- **Rate limits** on login, sign-up, posting, claiming and comments.
 
 ## 1. Run the backend
 
@@ -76,7 +78,41 @@ python manage.py seed_demo --lat 12.9716 --lng 77.5946
 python manage.py runserver 0.0.0.0:8000
 ```
 
-`seed_demo` creates 5 demo users (`asha`, `rahul`, `meera`, `karthik`, `sana`, password `demo-pass-123`) and 9 posts around the point you give, including a kept phone with a pending claim. Pass your campus coordinates for the demo.
+`seed_demo` creates 5 demo users (`asha`, `rahul`, `meera`, `karthik`, `sana`, password `demo-pass-123`) and 9 posts around the point you give, including a kept phone with a pending claim. Pass your campus coordinates for the demo. Demo accounts don't need an email code.
+
+### Sign-up email codes
+
+New accounts get a 6-digit code by email. Until you set up email, the codes are printed in the server log instead:
+
+```bash
+docker compose logs api | findstr code      # Windows
+docker compose logs api | grep code         # macOS / Linux
+```
+
+To send real emails from Gmail:
+
+1. Turn on 2-Step Verification for the Google account.
+2. Create an app password at https://myaccount.google.com/apppasswords.
+3. In `backend/.env`, set `EMAIL_HOST_USER=you@gmail.com` and `EMAIL_HOST_PASSWORD=` the 16-letter app password.
+4. Restart: `docker compose up -d --build`.
+
+### Use HTTPS (and reach the server from anywhere)
+
+This starts a free Cloudflare tunnel next to the API, with no account or install needed:
+
+```bash
+docker compose --profile tunnel up -d --build
+docker compose logs tunnel | findstr trycloudflare     # Windows
+```
+
+Copy the `https://something.trycloudflare.com` address into the app's server setting (the icon on the login screen). Traffic is encrypted, and phones work on any network, so you don't need the same Wi-Fi or a firewall rule. The address changes each time the tunnel restarts.
+
+The tunnel makes your server reachable from the internet, so in `backend/.env` set `DJANGO_DEBUG=false` and a real `DJANGO_SECRET_KEY`:
+
+```bash
+docker compose run --rm api python -c "import secrets; print(secrets.token_urlsafe(50))"
+```
+
 
 ### Tests
 
@@ -84,7 +120,7 @@ python manage.py runserver 0.0.0.0:8000
 python manage.py test lostfound
 ```
 
-36 tests cover auth, photo cleaning, blur enforcement, location privacy, the feed and map queries, the whole claim flow, votes, comments, reports, permissions, and a set of hardening checks (bad input, stale logins, zoomed-out maps).
+49 tests cover sign-up email codes, auth, photo cleaning, blur enforcement, location privacy, the feed and map queries, the whole claim flow, votes, comments, reports, permissions, and a set of hardening checks (bad input, stale logins, zoomed-out maps).
 
 ## 2. Run the Android app
 
@@ -125,7 +161,10 @@ flutter build apk --release --dart-define=API_BASE=http://<your-server>:8000
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/auth/register/`, `/api/auth/login/` | returns `{token, user}` |
+| POST | `/api/auth/register/` | creates the account and emails a code (no token yet) |
+| POST | `/api/auth/verify-email/` | `{username, code}`, returns `{token, user}` |
+| POST | `/api/auth/resend-code/` | `{username}`, one per minute |
+| POST | `/api/auth/login/` | returns `{token, user}`; 403 `email_unverified` if the code step is pending |
 | GET | `/api/meta/` | categories, handover options + guidance, report reasons |
 | GET | `/api/posts/?lat&lng&radius_km&type&category&q&sort` | paged feed |
 | GET | `/api/posts/map/?bbox=minLng,minLat,maxLng,maxLat` | up to 300 posts |
@@ -134,7 +173,7 @@ flutter build apk --release --dart-define=API_BASE=http://<your-server>:8000
 | POST | `/api/posts/{id}/vote/`, `/resolve/`, `/renew/`, `/report/` | |
 | GET/POST | `/api/posts/{id}/comments/` | `parent` for replies |
 | GET/POST | `/api/posts/{id}/claims/` | finder sees all, others see their own |
-| POST | `/api/claims/{id}/decide/`, `/api/claims/{id}/withdraw/` | |
+| POST | `/api/claims/{id}/decide/`, `/withdraw/`, `/revoke/` | revoke = finder cancels an approval |
 | GET | `/api/me/posts/`, `/api/me/claims/` | |
 
 Send `Authorization: Token <token>` on authenticated calls.
@@ -143,16 +182,39 @@ Send `Authorization: Token <token>` on authenticated calls.
 
 The project is set up for a class demo on a laptop and phones on the same Wi-Fi. For a public server, do these first:
 
-- **HTTPS.** The app talks plain `http://` on the local network, so passwords are not encrypted in transit. Put the API behind HTTPS (for example Caddy or Nginx with a free certificate) and use an `https://` server address.
+- **HTTPS.** Use the tunnel above, or put the API behind Caddy or Nginx with a free certificate, and use the `https://` address in the app. The app warns if you enter an unencrypted public address.
 - **Secrets.** Set `DJANGO_DEBUG=false`, a long random `DJANGO_SECRET_KEY` (the server refuses to start without one when debug is off), a real `POSTGRES_PASSWORD`, and `DJANGO_ALLOWED_HOSTS` to your domain.
 - **Demo accounts.** Don't run `seed_demo` on a public server: its accounts share a known password.
-- **Sign-up checks.** Accounts are not verified by email or phone yet, so one person can make several. That matters for claims and for the "3 reports hide a post" rule. Add OTP verification (see v2 ideas).
-- **Signing key.** `app/ci/debug.keystore` is a public test key. Create a private key for a Play Store release.
+- **Email.** Set up real email (above) so sign-up codes reach people.
+
+## Private signing key (for releases)
+
+Test builds are signed with the public key in `app/ci`, which is fine for testing. For a release, sign with your own private key, stored as GitHub secrets so it never sits in the repository. Docker can generate it, so you don't need to install Java.
+
+1. In PowerShell, in a folder **outside** the project (for example `C:\keys`), run this. Replace `YOUR-PASSWORD` with a strong password you'll keep somewhere safe:
+   ```powershell
+   docker run --rm -v ${PWD}:/keys -w /keys eclipse-temurin:21-jdk keytool -genkeypair -keystore release.keystore -storetype PKCS12 -alias release -keyalg RSA -keysize 2048 -validity 10000 -storepass YOUR-PASSWORD -dname "CN=Finding the Lost"
+   ```
+2. Copy it as text:
+   ```powershell
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("$PWD\release.keystore")) | Set-Clipboard
+   ```
+3. On GitHub, open the repo's **Settings > Secrets and variables > Actions > New repository secret** and add:
+
+   | Name | Value |
+   |---|---|
+   | `RELEASE_KEYSTORE_BASE64` | paste from step 2 |
+   | `RELEASE_KEYSTORE_PASSWORD` | your password |
+   | `RELEASE_KEY_ALIAS` | `release` |
+
+4. Back up `release.keystore` and the password (for example in a password manager). **If you lose them, you can never publish an update to the same app.** Never commit the file; `.gitignore` blocks it.
+
+The next build is signed with your key, and its summary page shows the key's fingerprint. Uninstall the test-key version from your phone once, then updates install normally.
 
 ## Next steps (v2 ideas)
 
 - Push notifications when something in your category is found nearby (Firebase Cloud Messaging).
 - In-app chat between finder and approved claimant (Django Channels).
-- Phone/email OTP verification at sign-up to cut fake accounts.
+- Phone (SMS) verification as well as email, for stronger one-person-one-account.
 - AI matching: CLIP image embeddings to suggest "this found item looks like your lost post".
 - Your own map tile server or a tile provider for heavy use; the OpenStreetMap public tiles are fine for a class demo but have a fair-use policy.

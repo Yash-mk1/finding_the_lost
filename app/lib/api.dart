@@ -12,12 +12,53 @@ class ApiException implements Exception {
   final String message;
   final Map<String, dynamic> fieldErrors;
 
-  ApiException(this.message, {this.statusCode, this.fieldErrors = const {}});
+  /// The server's machine-readable reason, e.g. "email_unverified".
+  final String? code;
+
+  /// The whole error body, for callers that need extra fields.
+  final Map<String, dynamic> body;
+
+  ApiException(this.message, {this.statusCode, this.fieldErrors = const {}, this.code, this.body = const {}});
 
   bool get isUnauthorized => statusCode == 401;
 
+  /// The account exists and the password was right, but the email hasn't been
+  /// confirmed yet. [verification] has what the code screen needs.
+  bool get needsEmailVerification => code == 'email_unverified';
+
+  PendingVerification? get verification => needsEmailVerification ? PendingVerification.fromJson(body) : null;
+
   @override
   String toString() => message;
+}
+
+/// A sign-up (or log in) waiting for the 6-digit code from the email.
+class PendingVerification {
+  final String username;
+  final String emailHint;
+  final String message;
+
+  /// Seconds before another code may be requested.
+  final int resendIn;
+
+  /// The server couldn't send the email; the person should ask again.
+  final bool emailFailed;
+
+  const PendingVerification({
+    required this.username,
+    required this.emailHint,
+    required this.message,
+    this.resendIn = 0,
+    this.emailFailed = false,
+  });
+
+  factory PendingVerification.fromJson(Map<String, dynamic> json) => PendingVerification(
+        username: (json['username'] as String?) ?? '',
+        emailHint: (json['email_hint'] as String?) ?? 'your email',
+        message: (json['detail'] as String?) ?? 'Enter the 6-digit code we emailed you.',
+        resendIn: (json['resend_in'] as num?)?.toInt() ?? 0,
+        emailFailed: (json['email_failed'] as bool?) ?? false,
+      );
 }
 
 /// A rectangle to blur on a photo, as fractions (0..1) of its width/height.
@@ -130,7 +171,11 @@ class ApiClient {
     if (signedOut) onUnauthorized?.call();
     var message = 'Something went wrong (error $statusCode).';
     final fields = <String, dynamic>{};
+    String? code;
+    var body = const <String, dynamic>{};
     if (data is Map<String, dynamic>) {
+      body = data;
+      code = data['code'] is String ? data['code'] as String : null;
       if (data['detail'] != null) {
         message = _flatten(data['detail']);
       } else if (data.isNotEmpty) {
@@ -140,7 +185,7 @@ class ApiClient {
     } else if (statusCode == 429) {
       message = 'Too many requests. Please wait a minute and try again.';
     }
-    throw ApiException(message, statusCode: statusCode, fieldErrors: fields);
+    throw ApiException(message, statusCode: statusCode, fieldErrors: fields, code: code, body: body);
   }
 
   static String _flatten(dynamic value) {
@@ -187,7 +232,9 @@ class ApiClient {
     return (data['token'] as String, AppUser.fromJson(data['user'] as Map<String, dynamic>));
   }
 
-  Future<(String, AppUser)> register({
+  /// Signs up. Returns a login straight away only if the server doesn't ask
+  /// for email confirmation; otherwise returns what the code screen needs.
+  Future<(String?, AppUser?, PendingVerification?)> register({
     required String username,
     required String email,
     required String password,
@@ -198,8 +245,23 @@ class ApiClient {
       'email': email,
       'password': password,
       'display_name': displayName,
-    });
+    }) as Map<String, dynamic>;
+    if (data['token'] is String) {
+      return (data['token'] as String, AppUser.fromJson(data['user'] as Map<String, dynamic>), null);
+    }
+    return (null, null, PendingVerification.fromJson(data));
+  }
+
+  /// Sends the 6-digit code from the email; returns a login on success.
+  Future<(String, AppUser)> verifyEmail(String username, String code) async {
+    final data = await _postPublic('/api/auth/verify-email/', {'username': username, 'code': code});
     return (data['token'] as String, AppUser.fromJson(data['user'] as Map<String, dynamic>));
+  }
+
+  /// Asks for a new code. Returns the server's message.
+  Future<String> resendCode(String username) async {
+    final data = await _postPublic('/api/auth/resend-code/', {'username': username});
+    return (data['detail'] as String?) ?? 'A new code is on its way.';
   }
 
   Future<AppUser> me() async => AppUser.fromJson(await _get('/api/auth/me/') as Map<String, dynamic>);
@@ -355,6 +417,27 @@ class ApiClient {
   }
 
   Future<void> withdrawClaim(int claimId) => _post('/api/claims/$claimId/withdraw/');
+
+  /// The finder takes back an approval. The claimant sees [reason].
+  Future<Claim> revokeClaim(int claimId, {String reason = ''}) async {
+    final data = await _post('/api/claims/$claimId/revoke/', {'response': reason});
+    return Claim.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// True when this address sends passwords unencrypted over the internet
+  /// (plain http:// to anything other than a home network or the emulator).
+  static bool isUnencryptedPublic(String address) {
+    final uri = Uri.tryParse(normalizeBase(address));
+    if (uri == null || uri.scheme != 'http') return false;
+    final host = uri.host;
+    if (host == 'localhost' || host == '10.0.2.2' || host.endsWith('.local')) return false;
+    final parts = host.split('.').map(int.tryParse).toList();
+    if (parts.length == 4 && parts.every((p) => p != null)) {
+      final a = parts[0]!, b = parts[1]!;
+      if (a == 10 || a == 127 || (a == 192 && b == 168) || (a == 172 && b >= 16 && b <= 31)) return false;
+    }
+    return true;
+  }
 
   // ------------------------------------------------------------------ me ---
 

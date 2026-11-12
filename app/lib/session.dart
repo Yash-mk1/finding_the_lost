@@ -79,9 +79,19 @@ class Session extends ChangeNotifier {
     await _store(token, newUser);
   }
 
-  Future<void> register(String username, String email, String password, String displayName) async {
-    final (token, newUser) =
+  /// Signs up. Returns null when signed in, or the pending email check.
+  Future<PendingVerification?> register(String username, String email, String password, String displayName) async {
+    final (token, newUser, pending) =
         await api.register(username: username, email: email, password: password, displayName: displayName);
+    if (token != null && newUser != null) {
+      await _store(token, newUser);
+      return null;
+    }
+    return pending;
+  }
+
+  Future<void> verifyEmail(String username, String code) async {
+    final (token, newUser) = await api.verifyEmail(username, code);
     await _store(token, newUser);
   }
 

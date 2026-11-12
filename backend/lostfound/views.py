@@ -354,6 +354,32 @@ class ClaimViewSet(mixins.RetrieveModelMixin, viewsets.GenericViewSet):
         return Response(ClaimSerializer(claim).data)
 
     @action(detail=True, methods=["post"])
+    def revoke(self, request, pk=None):
+        """
+        The finder takes back an approval (wrong person, no-show, answer turned
+        out to be a lucky guess). The claimant loses access to the exact
+        location and the item is open for claims again.
+        """
+        claim = self.get_object()
+        if claim.post.author_id != request.user.pk:
+            raise PermissionDenied("Only the finder can cancel an approval.")
+        reason = str(request.data.get("response", "") if hasattr(request.data, "get") else "").strip()[:1000]
+        with transaction.atomic():
+            post = Post.objects.select_for_update().get(pk=claim.post_id)
+            claim.refresh_from_db()
+            if claim.status != Claim.Status.APPROVED:
+                raise ValidationError({"detail": "Only an approved claim can be cancelled."})
+            if post.status == Post.Status.RETURNED:
+                raise ValidationError({"detail": "This item is already marked as returned."})
+            claim.status = Claim.Status.REVOKED
+            claim.finder_response = reason or "The finder cancelled this approval."
+            claim.decided_at = timezone.now()
+            claim.save(update_fields=["status", "finder_response", "decided_at"])
+            post.status = Post.Status.OPEN
+            post.save(update_fields=["status", "updated_at"])
+        return Response(ClaimSerializer(claim).data)
+
+    @action(detail=True, methods=["post"])
     def withdraw(self, request, pk=None):
         claim = self.get_object()
         if claim.claimant_id != request.user.pk:

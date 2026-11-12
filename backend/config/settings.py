@@ -148,7 +148,36 @@ REST_FRAMEWORK = {
 }
 
 # App rules (see lostfound/models.py for how they are used).
+# ---------------------------------------------------------------- email ---
+# Sign-up codes are emailed. With no EMAIL_HOST_USER set, emails are printed
+# in the server's log instead (see `docker compose logs api`), which is handy
+# for a demo. Set the EMAIL_* values in .env to send real emails (Gmail needs
+# an "app password", not your normal password).
+EMAIL_HOST = env("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(env("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
+EMAIL_TIMEOUT = 15
+EMAIL_BACKEND = env(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.smtp.EmailBackend" if EMAIL_HOST_USER else "django.core.mail.backends.console.EmailBackend",
+)
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", f"Finding the Lost <{EMAIL_HOST_USER or 'no-reply@localhost'}>")
+
+# ---------------------------------------------------------------- HTTPS ---
+# When the server sits behind an HTTPS proxy or tunnel (Cloudflare tunnel,
+# Caddy, Nginx), trust its note that the visitor used HTTPS. Without this,
+# photo links come back as http:// and the admin login fails its security
+# check. Only turn it off if the server is reachable directly, with no proxy.
+if env_bool("BEHIND_HTTPS_PROXY", True):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    USE_X_FORWARDED_HOST = True
+
 FTL = {
+    # New accounts must confirm their email with a 6-digit code before they
+    # can log in. Turn off only for quick local testing.
+    "REQUIRE_EMAIL_VERIFICATION": env_bool("FTL_REQUIRE_EMAIL_VERIFICATION", True),
     # Posts disappear from the feed after this many days unless renewed.
     "POST_LIFETIME_DAYS": int(env("FTL_POST_LIFETIME_DAYS", "30")),
     # "Kept it with me" posts show only an approximate area of this size.

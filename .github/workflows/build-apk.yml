@@ -113,6 +113,51 @@ jobs:
           flutter build apk "${args[@]}"
           cp build/app/outputs/flutter-apk/app-release.apk "finding-the-lost-$GITHUB_RUN_NUMBER.apk"
 
+      # If you've added your private key as repository secrets (see README,
+      # "Private signing key"), the APK is re-signed with it. Without the
+      # secrets, it stays signed with the public test key, which is fine for
+      # testing but not for the Play Store.
+      - name: Sign with your private key (if set up)
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          APK="finding-the-lost-$GITHUB_RUN_NUMBER.apk"
+          if [ -z "$RELEASE_KEYSTORE_BASE64" ]; then
+            echo "::warning::No private signing key set up, so this APK is signed with the public test key. Fine for testing; see README to add your own key."
+            {
+              echo "## Signing"
+              echo "Signed with the **public test key** (no private key in repository secrets)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          for name in RELEASE_KEYSTORE_PASSWORD RELEASE_KEY_ALIAS; do
+            if [ -z "${!name}" ]; then
+              echo "::error::The secret $name is missing. Add it under Settings > Secrets and variables > Actions."
+              exit 1
+            fi
+          done
+          KEYSTORE="$RUNNER_TEMP/release.keystore"
+          echo "$RELEASE_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "$KEYSTORE"
+          # For PKCS12 keystores the key password is the keystore password.
+          export KEY_PASS="${RELEASE_KEY_PASSWORD:-$RELEASE_KEYSTORE_PASSWORD}"
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)
+          "${BUILD_TOOLS}apksigner" sign \
+            --ks "$KEYSTORE" --ks-pass env:RELEASE_KEYSTORE_PASSWORD \
+            --ks-key-alias "$RELEASE_KEY_ALIAS" --key-pass env:KEY_PASS \
+            "$APK"
+          rm -f "$KEYSTORE"
+          "${BUILD_TOOLS}apksigner" verify --print-certs "$APK" | tee certs.txt
+          {
+            echo "## Signing"
+            echo "Signed with your **private key**:"
+            echo '```'
+            grep -E "certificate DN|SHA-256" certs.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload APK (Actions artifact)
         uses: actions/upload-artifact@v4
         with:

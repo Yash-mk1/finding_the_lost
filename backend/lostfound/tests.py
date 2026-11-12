@@ -2,10 +2,11 @@ import io
 import json
 import math
 import os
+import re
 
 from django.contrib.auth import get_user_model
-from django.contrib.gis.geos import Point
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core import mail
 from django.core.cache import cache
 from django.utils import timezone
 from PIL import Image
@@ -28,6 +29,14 @@ def photo_with_gps(name="item.jpg", size=(1200, 900)):
     return SimpleUploadedFile(name, buffer.getvalue(), content_type="image/jpeg")
 
 
+def latest_code(email):
+    """The 6-digit code from the newest email sent to this address."""
+    for message in reversed(mail.outbox):
+        if email in message.to:
+            return re.search(r"\b(\d{6})\b", message.body).group(1)
+    raise AssertionError(f"No email was sent to {email}")
+
+
 def metres_between(a, b):
     lng1, lat1, lng2, lat2 = map(math.radians, (a[1], a[0], b[1], b[0]))
     h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lng2 - lng1) / 2) ** 2
@@ -42,10 +51,18 @@ class ApiTestCase(APITestCase):
         self.stranger = self.register("stranger")
 
     def register(self, username):
+        """Sign up and confirm the email, the way the app does."""
+        saved = self.client._credentials.copy()
+        self.client.credentials()
         response = self.client.post("/api/auth/register/", {
             "username": username, "email": f"{username}@example.com", "password": "a-strong-pass-42",
         })
         self.assertEqual(response.status_code, 201, response.data)
+        self.assertTrue(response.data["verification_required"])
+        code = latest_code(f"{username}@example.com")
+        response = self.client.post("/api/auth/verify-email/", {"username": username, "code": code})
+        self.assertEqual(response.status_code, 200, response.data)
+        self.client.credentials(**saved)
         return {"token": response.data["token"], "id": response.data["user"]["id"]}
 
     def as_user(self, who):
@@ -422,3 +439,167 @@ class HardeningTests(ApiTestCase):
         self.as_user(self.owner)
         for expected in (1, 0, 1):
             self.assertEqual(self.client.post(f"/api/posts/{post['id']}/vote/").data["score"], expected)
+
+
+class EmailVerificationTests(ApiTestCase):
+    def sign_up(self, username="newbie"):
+        self.anonymous()
+        return self.client.post("/api/auth/register/", {
+            "username": username, "email": f"{username}@example.com", "password": "a-strong-pass-42",
+        })
+
+    def test_sign_up_gives_no_token_until_email_confirmed(self):
+        response = self.sign_up()
+        self.assertEqual(response.status_code, 201)
+        self.assertNotIn("token", response.data)
+        self.assertEqual(response.data["email_hint"], "n***@example.com")
+        # The code is not in the response, only in the email.
+        code = latest_code("newbie@example.com")
+        self.assertNotIn(code, json.dumps(response.data))
+
+        login = self.client.post("/api/auth/login/", {"username": "newbie", "password": "a-strong-pass-42"})
+        self.assertEqual(login.status_code, 403)
+        self.assertEqual(login.data["code"], "email_unverified")
+
+        ok = self.client.post("/api/auth/verify-email/", {"username": "newbie", "code": code})
+        self.assertEqual(ok.status_code, 200)
+        self.assertIn("token", ok.data)
+        login = self.client.post("/api/auth/login/", {"username": "newbie", "password": "a-strong-pass-42"})
+        self.assertEqual(login.status_code, 200)
+
+    def test_wrong_codes_run_out(self):
+        self.sign_up()
+        code = latest_code("newbie@example.com")
+        wrong = "000000" if code != "000000" else "111111"
+        for _ in range(5):
+            response = self.client.post("/api/auth/verify-email/", {"username": "newbie", "code": wrong})
+            self.assertEqual(response.status_code, 400)
+        # Even the right code no longer works; a new one is needed.
+        response = self.client.post("/api/auth/verify-email/", {"username": "newbie", "code": code})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Too many", response.data["detail"])
+
+    def test_expired_code(self):
+        from accounts.models import EmailVerification
+        self.sign_up()
+        code = latest_code("newbie@example.com")
+        EmailVerification.objects.filter(user__username="newbie").update(
+            code_expires_at=timezone.now() - timezone.timedelta(seconds=1)
+        )
+        response = self.client.post("/api/auth/verify-email/", {"username": "newbie", "code": code})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("expired", response.data["detail"])
+
+    def test_resend_has_a_cooldown_and_replaces_the_code(self):
+        from accounts.models import EmailVerification
+        self.sign_up()
+        first = latest_code("newbie@example.com")
+        self.assertEqual(self.client.post("/api/auth/resend-code/", {"username": "newbie"}).status_code, 429)
+        EmailVerification.objects.filter(user__username="newbie").update(
+            last_sent_at=timezone.now() - timezone.timedelta(minutes=2)
+        )
+        self.assertEqual(self.client.post("/api/auth/resend-code/", {"username": "newbie"}).status_code, 200)
+        second = latest_code("newbie@example.com")
+        if first != second:
+            bad = self.client.post("/api/auth/verify-email/", {"username": "newbie", "code": first})
+            self.assertEqual(bad.status_code, 400)
+        good = self.client.post("/api/auth/verify-email/", {"username": "newbie", "code": second})
+        self.assertEqual(good.status_code, 200)
+
+    def test_resend_does_not_reveal_who_has_an_account(self):
+        before = len(mail.outbox)
+        response = self.client.post("/api/auth/resend-code/", {"username": "nobody-here"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), before)
+        # Already-verified accounts get the same answer and no email.
+        response = self.client.post("/api/auth/resend-code/", {"username": "finder"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), before)
+
+    def test_wrong_password_never_sends_a_code(self):
+        self.sign_up()
+        before = len(mail.outbox)
+        response = self.client.post("/api/auth/login/", {"username": "newbie", "password": "wrong-password"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(len(mail.outbox), before)
+
+    def test_abandoned_sign_up_frees_its_username_after_a_day(self):
+        from accounts.models import EmailVerification
+        self.sign_up()
+        self.assertEqual(self.sign_up().status_code, 400)  # taken while fresh
+        EmailVerification.objects.filter(user__username="newbie").update(
+            created_at=timezone.now() - timezone.timedelta(hours=25)
+        )
+        self.assertEqual(self.sign_up().status_code, 201)
+
+    def test_admin_made_accounts_need_no_code(self):
+        User.objects.create_user("teacher", "teacher@example.com", "a-strong-pass-42")
+        response = self.client.post("/api/auth/login/", {"username": "teacher", "password": "a-strong-pass-42"})
+        self.assertEqual(response.status_code, 200)
+
+    def test_email_failure_does_not_crash_sign_up(self):
+        from unittest import mock
+        with mock.patch("accounts.verification.send_mail", side_effect=OSError("SMTP down")):
+            response = self.sign_up()
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.data["email_failed"])
+        # Once email works again, a new code can be requested.
+        response = self.client.post("/api/auth/resend-code/", {"username": "newbie"})
+        self.assertEqual(response.status_code, 200)
+
+
+class RevokeClaimTests(ApiTestCase):
+    def approved_claim(self):
+        post = self.create_found(handover=Handover.KEPT)
+        self.as_user(self.owner)
+        claim = self.client.post(f"/api/posts/{post['id']}/claims/", {"answer": "A beach"}).data
+        self.as_user(self.stranger)
+        other = self.client.post(f"/api/posts/{post['id']}/claims/", {"answer": "A sunset"}).data
+        self.as_user(self.finder)
+        self.client.post(f"/api/claims/{claim['id']}/decide/", {"decision": "approve", "response": "Gate 2"})
+        return post, claim, other
+
+    def test_finder_can_cancel_an_approval_and_approve_someone_else(self):
+        post, claim, other = self.approved_claim()
+        self.as_user(self.finder)
+        response = self.client.post(f"/api/claims/{claim['id']}/revoke/", {"response": "Wrong person, sorry"})
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["status"], "revoked")
+        self.assertEqual(Post.objects.get(pk=post["id"]).status, Post.Status.OPEN)
+
+        # The first claimant loses the exact location and sees why.
+        self.as_user(self.owner)
+        detail = self.client.get(f"/api/posts/{post['id']}/").data
+        self.assertTrue(detail["location_is_approximate"])
+        self.assertEqual(detail["my_claim"]["status"], "revoked")
+        self.assertEqual(detail["my_claim"]["finder_response"], "Wrong person, sorry")
+        # ...and can't simply claim again.
+        self.assertEqual(self.client.post(f"/api/posts/{post['id']}/claims/", {"answer": "x"}).status_code, 400)
+
+        self.as_user(self.finder)
+        response = self.client.post(f"/api/claims/{other['id']}/decide/", {"decision": "approve", "response": "Gate 3"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Post.objects.get(pk=post["id"]).status, Post.Status.CLAIMED)
+
+    def test_only_the_finder_and_only_approved_claims(self):
+        post, claim, other = self.approved_claim()
+        self.as_user(self.owner)
+        self.assertEqual(self.client.post(f"/api/claims/{claim['id']}/revoke/").status_code, 403)
+        self.as_user(self.finder)
+        self.assertEqual(self.client.post(f"/api/claims/{other['id']}/revoke/").status_code, 400)  # pending
+
+    def test_cannot_cancel_after_the_item_is_returned(self):
+        post, claim, other = self.approved_claim()
+        self.as_user(self.finder)
+        self.client.post(f"/api/posts/{post['id']}/resolve/")
+        self.assertEqual(self.client.post(f"/api/claims/{claim['id']}/revoke/").status_code, 400)
+
+
+class HttpsProxyTests(ApiTestCase):
+    def test_photo_links_use_https_behind_a_tunnel(self):
+        post = self.create_found(handover=Handover.LEFT_THERE)
+        self.anonymous()
+        data = self.client.get(
+            f"/api/posts/{post['id']}/", HTTP_X_FORWARDED_PROTO="https", HTTP_HOST="demo.trycloudflare.com"
+        ).data
+        self.assertTrue(data["images"][0]["url"].startswith("https://demo.trycloudflare.com/media/"))

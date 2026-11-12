@@ -140,6 +140,7 @@ class ActivityScreenState extends State<ActivityScreen> {
                 final (icon, color, label) = switch (claim.status) {
                   'approved' => (Icons.check_circle, Colors.green, 'Approved'),
                   'rejected' => (Icons.cancel, Colors.red, 'Not approved'),
+                  'revoked' => (Icons.undo, Colors.grey, 'Approval cancelled'),
                   _ => (Icons.hourglass_top, Colors.orange, 'Waiting for the finder'),
                 };
                 return Card(
