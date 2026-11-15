@@ -25,6 +25,9 @@ services:
         value: ".onrender.com"
       - key: WEB_CONCURRENCY
         value: "2"
+      # Secret admin address, e.g. desk-4d92layht2 (keep it in a password manager).
+      - key: DJANGO_ADMIN_URL
+        sync: false
       # Supabase: Connect > Session pooler connection string, with your
       # database password filled in.
       - key: DATABASE_URL

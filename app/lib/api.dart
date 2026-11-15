@@ -446,4 +446,54 @@ class ApiClient {
 
   Future<PagedResult<Claim>> myClaims({int page = 1}) async =>
       _page(await _get('/api/me/claims/', {'page': page}), Claim.fromJson);
+
+  // ------------------------------------------------------------ messages ---
+
+  /// The chat about a post: with its author, or (for the author) with
+  /// someone who claimed or commented ([withUser]).
+  Future<Conversation> openConversation(int postId, {int? withUser, String? firstMessage}) async {
+    final data = await _post('/api/posts/$postId/conversation/', {
+      if (withUser != null) 'user_id': withUser,
+      if (firstMessage != null && firstMessage.trim().isNotEmpty) 'body': firstMessage.trim(),
+    });
+    return Conversation.fromJson(data as Map<String, dynamic>);
+  }
+
+  Future<PagedResult<Conversation>> conversations({int page = 1}) async =>
+      _page(await _get('/api/conversations/', {'page': page}), Conversation.fromJson);
+
+  Future<Conversation> conversation(int id) async =>
+      Conversation.fromJson(await _get('/api/conversations/$id/') as Map<String, dynamic>);
+
+  /// New messages after [afterId] (all recent ones if null). Marks them read.
+  Future<ChatUpdate> messages(int conversationId, {int? afterId}) async {
+    final data = await _get('/api/conversations/$conversationId/messages/', {'after': afterId}) as Map<String, dynamic>;
+    final list = (data['results'] as List).map((e) => ChatMessage.fromJson(e as Map<String, dynamic>)).toList();
+    return ChatUpdate(list, (data['blocked'] as bool?) ?? false, (data['blocked_by_me'] as bool?) ?? false,
+        (data['safety_note'] as String?) ?? '');
+  }
+
+  Future<ChatMessage> sendMessage(int conversationId, String body) async {
+    final data = await _post('/api/conversations/$conversationId/messages/', {'body': body});
+    return ChatMessage.fromJson(data as Map<String, dynamic>);
+  }
+
+  Future<String> blockChat(int conversationId) async =>
+      ((await _post('/api/conversations/$conversationId/block/')) as Map<String, dynamic>)['detail'] as String? ?? 'Blocked.';
+
+  Future<String> unblockChat(int conversationId) async =>
+      ((await _post('/api/conversations/$conversationId/unblock/')) as Map<String, dynamic>)['detail'] as String? ?? 'Unblocked.';
+
+  Future<String> reportChat(int conversationId, String reason) async =>
+      ((await _post('/api/conversations/$conversationId/report/', {'reason': reason})) as Map<String, dynamic>)['detail']
+          as String? ??
+      'Reported.';
+
+  Future<int> unreadCount() async => ((await _get('/api/me/unread/')) as Map<String, dynamic>)['unread'] as int? ?? 0;
+
+  /// The finder asks every waiting claimant one more question, privately.
+  Future<String> askFollowUp(int postId, String question) async =>
+      ((await _post('/api/posts/$postId/follow-up/', {'question': question})) as Map<String, dynamic>)['detail']
+          as String? ??
+      'Sent.';
 }

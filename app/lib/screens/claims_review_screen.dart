@@ -5,6 +5,7 @@ import '../api.dart';
 import '../models.dart';
 import '../session.dart';
 import '../widgets.dart';
+import 'chat_screen.dart';
 
 /// The finder compares each claimant's answer with what they know about the
 /// item, then approves one (with a meetup message) or rejects.
@@ -83,6 +84,26 @@ class _ClaimsReviewScreenState extends State<ClaimsReviewScreen> {
     }
   }
 
+  /// Ask every waiting claimant one more question, privately in each chat,
+  /// so two people who gave the same answer can be told apart.
+  Future<void> _followUp() async {
+    final question = await promptText(
+      context,
+      title: 'Ask a follow-up question',
+      message: 'Each person with a waiting claim gets it privately in Messages, so they can\'t copy each other. '
+          'Ask about something not visible in your photos.',
+      hint: 'e.g. What\'s written on the back? What else was inside?',
+      confirm: 'Ask',
+    );
+    if (question == null) return;
+    try {
+      final message = await _api.askFollowUp(widget.post.id, question);
+      if (mounted) showSnack(context, message);
+    } on ApiException catch (e) {
+      if (mounted) showSnack(context, e.message, error: true);
+    }
+  }
+
   Future<void> _decide(Claim claim, {required bool approve, required String response}) async {
     try {
       await _api.decideClaim(claim.id, approve: approve, response: response);
@@ -123,6 +144,24 @@ class _ClaimsReviewScreenState extends State<ClaimsReviewScreen> {
                         ]),
                       ),
                     ),
+                    if (claims.any((c) => c.isPending) && !anyApproved) ...[
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.quiz_outlined),
+                        label: const Text('Ask a follow-up question'),
+                        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
+                        onPressed: _followUp,
+                      ),
+                      if (claims.where((c) => c.isPending).length > 1)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            'Several people answered? Ask a second question only the owner could know, chat with them, '
+                            'or hand the item over at a police station where they can check proof.',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ),
+                    ],
                     const SizedBox(height: 12),
                     if (claims.isEmpty)
                       const MessageView(
@@ -173,17 +212,23 @@ class _ClaimsReviewScreenState extends State<ClaimsReviewScreen> {
             Text('Your reply', style: theme.textTheme.labelMedium),
             Text(claim.finderResponse),
           ],
-          if (claim.isPending) ...[
-            const SizedBox(height: 10),
-            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          const SizedBox(height: 10),
+          Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            TextButton.icon(
+              icon: const Icon(Icons.chat_bubble_outline, size: 18),
+              label: const Text('Message'),
+              onPressed: () => openChatAbout(context, widget.post, withUser: claim.claimant),
+            ),
+            if (claim.isPending) ...[
+              const SizedBox(width: 4),
               TextButton(onPressed: () => _reject(claim), child: const Text('Reject')),
               const SizedBox(width: 8),
               FilledButton(
                 onPressed: anyApproved ? null : () => _approve(claim),
                 child: const Text('Approve'),
               ),
-            ]),
-          ],
+            ],
+          ]),
           if (claim.isApproved && widget.post.status != 'returned') ...[
             const SizedBox(height: 6),
             Align(

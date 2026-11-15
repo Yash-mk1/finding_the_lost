@@ -53,19 +53,50 @@ INSTALLED_APPS = [
     "django.contrib.gis",
     "rest_framework",
     "rest_framework.authtoken",
+    "axes",
     "accounts",
     "lostfound",
+    "chat",
+    "web",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Serves the website's and the admin's CSS/JS efficiently under gunicorn.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # Must stay last: turns a locked-out log-in into the lockout response.
+    "axes.middleware.AxesMiddleware",
 ]
+
+# ------------------------------------------------- log-in lockout (axes) ---
+# After 5 wrong passwords for the same (address, username) pair, that pair is
+# locked for an hour. Locking on the pair, not the address alone, stops an
+# attacker on a shared network (college Wi-Fi) from locking the owner out.
+AUTHENTICATION_BACKENDS = [
+    "axes.backends.AxesStandaloneBackend",  # must be first
+    "django.contrib.auth.backends.ModelBackend",
+]
+AXES_FAILURE_LIMIT = int(env("AXES_FAILURE_LIMIT", "5"))
+AXES_COOLOFF_TIME = int(env("AXES_COOLOFF_HOURS", "1"))
+AXES_LOCKOUT_PARAMETERS = [["ip_address", "username"]]
+AXES_RESET_ON_SUCCESS = True
+AXES_LOCKOUT_CALLABLE = "web.security.lockout_response"
+# Behind Render's proxy every request arrives from the load balancer, so axes
+# must read the visitor from X-Forwarded-For, or it would see one address for
+# everyone and lock out all visitors at once. Same function as the rate limit.
+AXES_CLIENT_IP_CALLABLE = "web.throttling.client_address"
+AXES_VERBOSE = False
+
+# The admin's address. Moving it off /admin/ keeps it out of bot sweeps (the
+# lockout above does the real protecting). Keep the value somewhere safe:
+# the only way to recover it is to read this setting back.
+ADMIN_URL = env("DJANGO_ADMIN_URL", "admin/").strip("/") + "/"
 
 ROOT_URLCONF = "config.urls"
 
@@ -135,7 +166,7 @@ MEDIA_ROOT = Path(env("MEDIA_ROOT", str(BASE_DIR / "media")))
 S3_BUCKET = env("S3_BUCKET", "")
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
-    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
 }
 if S3_BUCKET:
     # Newer boto3 adds checksum headers that some S3-compatible services
@@ -165,6 +196,8 @@ if S3_BUCKET:
 # Let Django serve uploaded photos (when on disk) and the admin's CSS itself
 # (fine for a class project; use a CDN or Nginx for heavy traffic).
 SERVE_MEDIA = env_bool("SERVE_MEDIA", True)
+# Locally (runserver, tests) serve the website files straight from the app folders.
+WHITENOISE_USE_FINDERS = DEBUG
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -185,7 +218,9 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_CLASSES": [
         "rest_framework.throttling.AnonRateThrottle",
         "rest_framework.throttling.UserRateThrottle",
-        "rest_framework.throttling.ScopedRateThrottle",
+        # Same scopes and rates as DRF's ScopedRateThrottle, counted in the
+        # database so the limit holds across gunicorn workers and restarts.
+        "web.throttling.DatabaseScopedRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
         "anon": env("THROTTLE_ANON", "120/min"),
@@ -196,6 +231,7 @@ REST_FRAMEWORK = {
         "comment": env("THROTTLE_COMMENT", "30/min"),
         "post_create": env("THROTTLE_POST_CREATE", "20/hour"),
         "claim": env("THROTTLE_CLAIM", "10/hour"),
+        "message": env("THROTTLE_MESSAGE", "30/min"),
     },
 }
 
@@ -245,4 +281,14 @@ FTL = {
     "MAX_IMAGES_PER_POST": 5,
     "MAX_IMAGE_MB": 10,
     "IMAGE_MAX_SIDE_PX": 1600,
+}
+
+# Log to the console (Render shows it under Logs).
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"plain": {"format": "%(levelname)s %(name)s: %(message)s"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "plain"}},
+    "root": {"handlers": ["console"], "level": "WARNING"},
+    "loggers": {"findit": {"handlers": ["console"], "level": "INFO", "propagate": False}},
 }

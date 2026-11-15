@@ -1,10 +1,11 @@
 # Findit
 
-A community lost-and-found app. A finder photographs an item, the phone tags where it was found, and the finder says what they did with it (left it there, gave it to the police, gave it to a desk, or kept it). Owners browse a Reddit-style feed or a map, and claim kept items by answering a question only the real owner would know.
+A community lost-and-found app, for Android and the web. A finder photographs an item, the phone tags where it was found, and the finder says what they did with it (left it there, gave it to the police, gave it to a desk, or kept it). Owners browse a Reddit-style feed or a map, and claim kept items by answering a question only the real owner would know.
 
 ```
 finding-the-lost/
 ├── backend/   Django + Django REST Framework + GeoDjango (PostGIS)
+│   └── web/   the website (served at /), same API and data as the app
 └── app/       Flutter Android app
 ```
 
@@ -21,6 +22,8 @@ finding-the-lost/
 | Upvotes and threaded comments | `post_detail_screen.dart` |
 | Claims with a verification question; finder approves with a private meetup message, and can cancel an approval | `claims_review_screen.dart`, `/api/posts/{id}/claims/`, `/api/claims/{id}/decide/`, `/revoke/` |
 | My activity: my posts (with pending claims) and my claims | `activity_screen.dart` |
+| Private messages about a post: anyone can message the finder/owner; the finder can message claimants; block and report a chat; unread badge | `backend/chat`, `chat_screen.dart`, `messages_screen.dart` |
+| Follow-up question: the finder asks every waiting claimant one more question, privately, to tell apart people who gave the same answer | `claims_review_screen.dart`, `/api/posts/{id}/follow-up/` |
 | Report posts; 3 reports hide a post for review; Django admin for moderators | `/api/posts/{id}/report/`, `/admin/` |
 | Posts leave the feed after 30 days unless renewed; "mark returned" | `/renew/`, `/resolve/` |
 
@@ -136,10 +139,30 @@ Notes:
 ### Tests
 
 ```bash
-python manage.py test lostfound
+python manage.py test
 ```
 
-56 tests cover sign-up email codes, auth, photo cleaning, blur enforcement, location privacy, the feed and map queries, the whole claim flow, votes, comments, reports, permissions, hardening checks (bad input, stale logins, zoomed-out maps) and the hosting pieces (health check, startup admin, Brevo email).
+74 tests cover sign-up email codes, auth, photo cleaning, blur enforcement, location privacy, the feed and map queries, the whole claim flow, votes, comments, reports, permissions, hardening checks (bad input, stale logins, zoomed-out maps), the hosting pieces (health check, startup admin, Brevo email), the website's security layer (honeypot, database rate limits, log-in lockout, admin address), and private messages (privacy, blocking, follow-up questions).
+
+## Website
+
+The backend also serves the website at its home page (for example `https://finding-the-lost.onrender.com/`). It has the same screens and rules as the app, uses the same API, accounts and posts, and follows the app's look (Material 3 colours from the same seed colour, Roboto, the same icons). It's plain JavaScript with no build step: `backend/web/static/web/app.js`, `app.css`, and Leaflet for maps.
+
+On a phone browser the Camera button opens the camera, and the location is taken from the browser when the photo is added (the browser asks for permission once; it needs HTTPS, which Render provides).
+
+### Security layer (webpiov2)
+
+| Protection | How it works | Where |
+|---|---|---|
+| Honeypot on every public form | A hidden `website` field (off-screen, out of the tab order, hidden from screen readers, labelled "Leave this field empty"). Sign-up, log in, posts, comments, claims and reports are refused with a clear message if it's filled. The app doesn't send it. | `web/security.py` |
+| Rate limits that hold | The per-action limits (sign-up/log-in, posting, claims, comments) are counted in the database, not each worker's memory, so they hold across gunicorn workers and restarts. Addresses are stored only as a salted hash. Every write counts, valid or not. Old rows are pruned as it goes. | `web/throttling.py`, `ClientHit` |
+| Log-in lockout | django-axes: 5 wrong passwords for the same (address, username) pair lock that pair for an hour, for the app, the website and the admin. Someone else on the same Wi-Fi isn't locked out. A correct password resets the count. | `config/settings.py` |
+| Movable admin address | `DJANGO_ADMIN_URL` moves the admin off `/admin/`. | `config/urls.py` |
+| Strict page policy | The page only runs its own scripts (Content-Security-Policy), and all text from users is inserted as text, never HTML. | `web/views.py`, `app.js` |
+
+Measured with 2 gunicorn workers, 200 comment posts fired in a burst by one account: **60 accepted before** (the old in-memory limit let one limit through per worker), **30 accepted after** (exactly the 30/min limit), and the limit still held after a restart. A person posting normally is never near the limits.
+
+Trade-offs to know: `X-Forwarded-For` (used to tell visitors apart behind Render's proxy) can be forged, so the limits are a speed bump for scripts, not an identity check; stopping a determined attacker needs a web application firewall in front, which is a hosting decision.
 
 ## 2. Run the Android app
 
@@ -195,6 +218,12 @@ flutter build apk --release --dart-define=API_BASE=http://<your-server>:8000
 | GET/POST | `/api/posts/{id}/claims/` | finder sees all, others see their own |
 | POST | `/api/claims/{id}/decide/`, `/withdraw/`, `/revoke/` | revoke = finder cancels an approval |
 | GET | `/api/me/posts/`, `/api/me/claims/` | |
+| POST | `/api/posts/{id}/conversation/` | open the chat about a post (`user_id` when the author messages a claimant or commenter; optional first `body`) |
+| GET | `/api/conversations/` | my chats, newest first, with unread counts |
+| GET/POST | `/api/conversations/{id}/messages/` | `?after=<id>` for new ones (marks them read); POST `{body}` |
+| POST | `/api/conversations/{id}/block/`, `/unblock/`, `/report/` | |
+| POST | `/api/posts/{id}/follow-up/` | `{question}` to every waiting claimant |
+| GET | `/api/me/unread/` | `{unread}` for the Messages badge |
 
 Send `Authorization: Token <token>` on authenticated calls.
 
@@ -234,7 +263,7 @@ The next build is signed with your key, and its summary page shows the key's fin
 ## Next steps (v2 ideas)
 
 - Push notifications when something in your category is found nearby (Firebase Cloud Messaging).
-- In-app chat between finder and approved claimant (Django Channels).
+- Instant chat delivery (Django Channels / push notifications) instead of checking every few seconds.
 - Phone (SMS) verification as well as email, for stronger one-person-one-account.
 - AI matching: CLIP image embeddings to suggest "this found item looks like your lost post".
 - Your own map tile server or a tile provider for heavy use; the OpenStreetMap public tiles are fine for a class demo but have a fair-use policy.

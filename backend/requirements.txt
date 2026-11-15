@@ -7,3 +7,5 @@ psycopg[binary]>=3.2,<4
 gunicorn>=23,<26
 dj-database-url>=2.3,<4
 django-storages[s3]>=1.14,<2
+django-axes>=8.0,<9
+whitenoise>=6.8,<7

@@ -1,0 +1,22 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Findit – Lost and Found</title>
+  <meta name="description" content="Found something? Lost something? Findit is a community lost-and-found: post what you found with where you found it, and claim what's yours.">
+  <meta name="theme-color" content="#f5fbf5" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0f1511" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="{% static 'web/icon.svg' %}" type="image/svg+xml">
+  <link rel="preload" href="{% static 'web/fonts/roboto-latin-400-normal.woff2' %}" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="{% static 'web/vendor/leaflet/leaflet.css' %}">
+  <link rel="stylesheet" href="{% static 'web/app.css' %}?v={{ v }}">
+  <script src="{% static 'web/vendor/leaflet/leaflet.js' %}" defer></script>
+  <script type="module" src="{% static 'web/app.js' %}?v={{ v }}"></script>
+</head>
+<body>
+  <div id="app"><div class="splash" role="status" aria-label="Loading"><div class="spinner"></div></div></div>
+  <div id="overlay-root"></div>
+  <noscript><p class="noscript">Findit needs JavaScript turned on.</p></noscript>
+</body>
+</html>

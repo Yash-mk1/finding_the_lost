@@ -7,6 +7,7 @@ import '../api.dart';
 import '../models.dart';
 import '../session.dart';
 import '../widgets.dart';
+import 'chat_screen.dart';
 import 'claims_review_screen.dart';
 import 'map_screen.dart';
 
@@ -192,6 +193,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
               _header(post),
               if (post.isFound && post.handover.isNotEmpty) _guidance(post),
               _claimSection(post),
+              _messageButton(post),
               _location(post),
               if (post.description.isNotEmpty)
                 Padding(
@@ -344,6 +346,20 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
           const SizedBox(height: 2),
           Text(post.guidance, style: TextStyle(color: theme.colorScheme.onSecondaryContainer)),
         ]),
+      ),
+    );
+  }
+
+  /// Anyone but the author can ask about the item privately.
+  Widget _messageButton(Post post) {
+    if (post.isOwner || post.status == 'hidden') return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: OutlinedButton.icon(
+        icon: const Icon(Icons.chat_bubble_outline),
+        label: Text(post.isFound ? 'Message the finder' : 'Message ${post.author.displayName}'),
+        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(46)),
+        onPressed: () => openChatAbout(context, post),
       ),
     );
   }

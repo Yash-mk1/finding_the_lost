@@ -15,6 +15,8 @@ from rest_framework.decorators import action, api_view, authentication_classes, 
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
+from web.security import honeypot_response
+
 from .images import ImageError, clean_image
 from .models import HANDOVER_GUIDANCE, Category, Claim, Handover, Post, PostImage, Report, Vote
 from .serializers import (
@@ -171,6 +173,8 @@ class PostViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
+        if (blocked := honeypot_response(request)) is not None:
+            return blocked
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         images = serializer.validated_data.get("images") or []
@@ -250,6 +254,8 @@ class PostViewSet(viewsets.ModelViewSet):
             return Response(CommentSerializer(comments, many=True).data)
         if not request.user.is_authenticated:
             raise PermissionDenied("Log in to comment.")
+        if (blocked := honeypot_response(request)) is not None:
+            return blocked
         serializer = CommentSerializer(data=request.data, context={"post": post})
         serializer.is_valid(raise_exception=True)
         comment = serializer.save(post=post, author=request.user)
@@ -268,6 +274,8 @@ class PostViewSet(viewsets.ModelViewSet):
                 claims = claims.filter(claimant=request.user)
             return Response(ClaimSerializer(claims, many=True).data)
 
+        if (blocked := honeypot_response(request)) is not None:
+            return blocked
         if post.author_id == request.user.pk:
             raise ValidationError({"detail": "You can't claim your own post."})
         if not post.claims_enabled:
@@ -304,6 +312,8 @@ class PostViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], permission_classes=[permissions.IsAuthenticated])
     def report(self, request, pk=None):
+        if (blocked := honeypot_response(request)) is not None:
+            return blocked
         post = self._post(pk)
         if post.author_id == request.user.pk:
             raise ValidationError({"detail": "You can't report your own post."})

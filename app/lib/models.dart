@@ -299,3 +299,90 @@ class PagedResult<T> {
 
   PagedResult(this.results, this.hasMore, this.count);
 }
+
+/// A private chat about one post, between its author and one other person.
+class Conversation {
+  final int id;
+  final int postId;
+  final String postTitle;
+  final String postType; // found | lost
+  final String postStatus;
+  final String category;
+  final String? thumbnail;
+  final Author otherUser;
+  final bool iAmAuthor;
+  final String lastMessage;
+  final bool lastFromMe;
+  final DateTime? lastMessageAt;
+  final int unread;
+  final bool blocked;
+  final bool blockedByMe;
+
+  Conversation({
+    required this.id,
+    required this.postId,
+    required this.postTitle,
+    required this.postType,
+    required this.postStatus,
+    required this.category,
+    required this.thumbnail,
+    required this.otherUser,
+    required this.iAmAuthor,
+    required this.lastMessage,
+    required this.lastFromMe,
+    required this.lastMessageAt,
+    required this.unread,
+    required this.blocked,
+    required this.blockedByMe,
+  });
+
+  factory Conversation.fromJson(Map<String, dynamic> json) {
+    final post = json['post'] as Map<String, dynamic>;
+    final last = json['last_message'] as Map<String, dynamic>?;
+    return Conversation(
+      id: json['id'] as int,
+      postId: post['id'] as int,
+      postTitle: (post['title'] as String?) ?? '',
+      postType: (post['post_type'] as String?) ?? 'found',
+      postStatus: (post['status'] as String?) ?? 'open',
+      category: (post['category'] as String?) ?? 'other',
+      thumbnail: post['thumbnail'] as String?,
+      otherUser: Author.fromJson(json['other_user'] as Map<String, dynamic>),
+      iAmAuthor: (json['i_am_author'] as bool?) ?? false,
+      lastMessage: (last?['body'] as String?) ?? '',
+      lastFromMe: (last?['sender_is_me'] as bool?) ?? false,
+      lastMessageAt: _date(json['last_message_at']),
+      unread: (json['unread'] as int?) ?? 0,
+      blocked: (json['blocked'] as bool?) ?? false,
+      blockedByMe: (json['blocked_by_me'] as bool?) ?? false,
+    );
+  }
+}
+
+class ChatMessage {
+  final int id;
+  final String body;
+  final bool fromMe;
+  final bool isRead;
+  final DateTime? createdAt;
+
+  ChatMessage({required this.id, required this.body, required this.fromMe, required this.isRead, this.createdAt});
+
+  factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
+        id: json['id'] as int,
+        body: (json['body'] as String?) ?? '',
+        fromMe: (json['sender_is_me'] as bool?) ?? false,
+        isRead: (json['is_read'] as bool?) ?? false,
+        createdAt: _date(json['created_at']),
+      );
+}
+
+/// One poll of a chat: new messages plus its blocked state.
+class ChatUpdate {
+  final List<ChatMessage> messages;
+  final bool blocked;
+  final bool blockedByMe;
+  final String safetyNote;
+
+  ChatUpdate(this.messages, this.blocked, this.blockedByMe, this.safetyNote);
+}

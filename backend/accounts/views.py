@@ -1,11 +1,14 @@
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model, password_validation
+from django.contrib.auth.signals import user_logged_in
 from django.db import transaction
 from django.db.models import Q
 from rest_framework import permissions, serializers, status
 from rest_framework.authtoken.models import Token
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from web.security import honeypot_response
 
 from .models import EmailVerification
 from .verification import (
@@ -96,6 +99,8 @@ class RegisterView(APIView):
     throttle_scope = "auth"
 
     def post(self, request):
+        if (blocked := honeypot_response(request)) is not None:
+            return blocked
         data = request.data if hasattr(request.data, "get") else {}
         free_stale_signups(str(data.get("username") or ""), str(data.get("email") or ""))
         serializer = RegisterSerializer(data=data)
@@ -130,13 +135,21 @@ class LoginView(APIView):
     throttle_scope = "auth"
 
     def post(self, request):
+        if (blocked := honeypot_response(request)) is not None:
+            return blocked
         data = request.data if hasattr(request.data, "get") else {}
         identifier = str(data.get("username") or "").strip()
         password = str(data.get("password") or "")
         match = User.objects.filter(Q(username__iexact=identifier) | Q(email__iexact=identifier)).first()
-        user = authenticate(request, username=match.username, password=password) if match else None
+        # Always go through authenticate(), even for unknown names, so the
+        # lockout (django-axes) counts every failed try. Axes needs Django's
+        # own request object; its middleware turns a lockout into a 429.
+        user = authenticate(request._request, username=match.username if match else identifier, password=password)
         if user is None:
             return Response({"detail": "Wrong username or password."}, status=status.HTTP_400_BAD_REQUEST)
+        # The password was right: clear the failed-attempt count (django-axes
+        # listens for this signal) and record the last login.
+        user_logged_in.send(sender=user.__class__, request=request._request, user=user)
         if _verification_on() and not is_verified(user):
             # Right password, but the email was never confirmed: send a code
             # (unless one went out in the last minute) and ask for it.

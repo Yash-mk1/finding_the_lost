@@ -22,9 +22,25 @@ class Command(BaseCommand):
     help = "Create the admin account and (optionally) demo data from environment variables."
 
     def handle(self, *args, **options):
+        self._report_email()
         self._ensure_admin()
         if _flag("SEED_DEMO"):
             self._seed_demo()
+
+    def _report_email(self):
+        """Say in the log how sign-up codes will be sent, to make email set-up easy to check."""
+        from django.conf import settings
+
+        backend = settings.EMAIL_BACKEND.rsplit(".", 1)[-1]
+        if backend == "BrevoEmailBackend":
+            how = f"Brevo API, from {settings.DEFAULT_FROM_EMAIL}"
+        elif backend == "EmailBackend" and "smtp" in settings.EMAIL_BACKEND:
+            how = f"SMTP {settings.EMAIL_HOST}:{settings.EMAIL_PORT} as {settings.EMAIL_HOST_USER}"
+        elif "console" in settings.EMAIL_BACKEND:
+            how = "printed in this log (no BREVO_API_KEY or EMAIL_HOST_USER set)"
+        else:
+            how = settings.EMAIL_BACKEND
+        self.stdout.write(f"Sign-up code emails: {how}.")
 
     def _ensure_admin(self):
         username = os.environ.get("DJANGO_SUPERUSER_USERNAME", "").strip()

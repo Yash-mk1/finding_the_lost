@@ -6,6 +6,7 @@ a new one must be requested. A new code can be sent at most once a minute.
 """
 import hashlib
 import hmac
+import logging
 import secrets
 from datetime import timedelta
 
@@ -14,6 +15,8 @@ from django.core.mail import send_mail
 from django.utils import timezone
 
 from .models import EmailVerification
+
+log = logging.getLogger("findit.email")
 
 CODE_LIFETIME = timedelta(minutes=10)
 RESEND_COOLDOWN = timedelta(seconds=60)
@@ -72,7 +75,9 @@ def send_code(user, force=False):
             recipient_list=[user.email],
             fail_silently=False,
         )
-    except Exception as exc:  # SMTP down, wrong password, no network...
+    except Exception as exc:  # SMTP down, wrong password, Brevo refused, no network...
+        # Logged so the reason shows in the server log (Render > Logs).
+        log.error("Sign-up code email to %s failed: %s", mask_email(user.email), exc)
         raise EmailSendError(str(exc)) from exc
 
     record.code_hash = _hash(user.pk, code)
