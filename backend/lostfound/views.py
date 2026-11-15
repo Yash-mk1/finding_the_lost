@@ -419,7 +419,9 @@ class MyClaimsViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return Claim.objects.select_related("post", "claimant").filter(claimant=self.request.user)
+            return annotate_for_user(Post.objects.filter(author=self.request.user), self.request.user).annotate(
+            pending_claims=Count("claims", filter=Q(claims__status=Claim.Status.PENDING), distinct=True)
+        ).order_by("-created_at")
 
 
 @api_view(["GET"])
